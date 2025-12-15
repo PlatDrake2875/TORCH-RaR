@@ -1,3 +1,11 @@
+# Environment files (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Backup files
+*.backup.*
+
 # Python-generated files
 __pycache__/
 *.py[oc]

@@ -81,3 +81,25 @@ Key settings:
 
 2. **Explicit Aggregation**: Each criterion evaluated independently, normalized weighted sum
 3. **Implicit Aggregation**: All rubrics passed to LLM judge for holistic scoring (1-10 Likert)
+
+## Deployment Scripts
+
+The `scripts/deploy.sh` script provides automated deployment and management:
+
+```bash
+# Interactive deployment menu
+./scripts/deploy.sh
+
+# Full setup with provider selection
+./scripts/deploy.sh setup [vllm|openrouter|litellm_proxy]
+
+# Service management
+./scripts/deploy.sh start [vllm|litellm]   # Start services
+./scripts/deploy.sh stop                    # Stop all services
+./scripts/deploy.sh status                  # Show service status
+./scripts/deploy.sh logs [vllm|litellm]    # View service logs
+
+# Testing and validation
+./scripts/deploy.sh test      # Test LLM connection
+./scripts/deploy.sh validate  # Validate config files
+```
