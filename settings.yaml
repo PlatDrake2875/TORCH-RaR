@@ -1,0 +1,65 @@
+# TORCH-RaR Configuration
+# =============================================================================
+
+# LLM Provider Configuration
+# Options: openrouter, vllm, litellm_proxy
+llm_provider: vllm
+
+# =============================================================================
+# OpenRouter Configuration (default provider)
+# =============================================================================
+
+# Get your API key from https://openrouter.ai/keys
+openrouter_api_key: ${OPENROUTER_API_KEY}  # Can use env var or paste key directly
+openrouter_base_url: https://openrouter.ai/api/v1
+
+# Model selection for OpenRouter
+rubric_generator_model: openrouter/openai/gpt-4o
+judge_model: openrouter/openai/gpt-4o-mini
+
+# =============================================================================
+# vLLM Configuration (local Docker deployment)
+# =============================================================================
+
+vllm_base_url: http://localhost:8000/v1
+vllm_model_name: meta-llama/Llama-3.1-8B-Instruct
+
+# =============================================================================
+# LiteLLM Proxy Configuration
+# =============================================================================
+
+litellm_proxy_url: http://localhost:4000
+litellm_api_key: null  # Set if your proxy requires authentication
+
+# =============================================================================
+# Dataset Configuration
+# =============================================================================
+
+dataset_name: olimpia20/toxicity-dataset-ro-master
+dataset_split: train
+output_dir: ./output
+
+# =============================================================================
+# Rubric Configuration
+# =============================================================================
+
+min_rubric_items: 7
+max_rubric_items: 20
+
+# =============================================================================
+# Processing Configuration
+# =============================================================================
+
+batch_size: 10
+max_concurrent_requests: 5
+request_timeout: 120
+max_retries: 3
+
+# =============================================================================
+# Reward Weights (for explicit aggregation, following RaR paper)
+# =============================================================================
+
+weight_essential: 1.0
+weight_important: 0.7
+weight_optional: 0.3
+weight_pitfall: 0.9

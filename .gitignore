@@ -1,0 +1,45 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+ENV/
+
+# Local settings overrides (keep settings.yaml as template)
+settings.local.yaml
+settings.*.local.yaml
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Output files
+output/
+*.parquet
+*.csv
+
+# Logs
+*.log
+logs/
+
+# HuggingFace cache
+.cache/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# uv lock file (optional - you may want to commit this)
+# uv.lock

@@ -1,0 +1,50 @@
+# LiteLLM Proxy Configuration
+# See: https://docs.litellm.ai/docs/proxy/deploy
+
+model_list:
+  # Local vLLM instance (when running with docker-compose)
+  - model_name: local/llama-3.1-8b
+    litellm_params:
+      model: hosted_vllm/meta-llama/Llama-3.1-8B-Instruct
+      api_base: http://vllm:8000/v1
+      api_key: "not-needed"  # vLLM doesn't require API key by default
+
+  # OpenRouter models (cloud-based)
+  - model_name: openrouter/openai/gpt-4o
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter/openai/gpt-4o-mini
+    litellm_params:
+      model: openrouter/openai/gpt-4o-mini
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter/anthropic/claude-3.5-sonnet
+    litellm_params:
+      model: openrouter/anthropic/claude-3.5-sonnet
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter/meta-llama/llama-3.1-70b-instruct
+    litellm_params:
+      model: openrouter/meta-llama/llama-3.1-70b-instruct
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Fallback model aliases for flexibility
+  - model_name: rubric-generator
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: judge
+    litellm_params:
+      model: openrouter/openai/gpt-4o-mini
+      api_key: os.environ/OPENROUTER_API_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 120
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
