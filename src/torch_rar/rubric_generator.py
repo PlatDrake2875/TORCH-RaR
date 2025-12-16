@@ -1,8 +1,36 @@
-"""Rubric generation module following the RaR (Rubrics as Rewards) method."""
+"""Rubric generation module following the RaR (Rubrics as Rewards) method.
+
+This module implements the rubric generation strategy from:
+- "Rubrics as Rewards: Reinforcement Learning Beyond Verifiable Domains" (Scale AI)
+- TORCH-RaR framework for Romanian toxicity detection
+
+IMPORTANT: These rubrics evaluate MODEL PREDICTIONS, not text content directly.
+The RaR methodology uses rubrics to score how well a model's prediction
+aligns with the ground truth label during RL training.
+
+The rubrics follow a hierarchical structure (per guide Section 5.1):
+- Essential (E1-E4): Critical classification factors
+  - E1: correct_label_assignment, weight=1.0
+  - E2: personal_attack_detection, weight=0.95
+  - E3: threat_incitement_detection, weight=0.90
+  - E4: group_hatred_detection, weight=0.90
+- Important (I1-I4): Contextual quality factors
+  - I1: contextual_appropriateness, weight=0.70
+  - I2: emotional_intensity_recognition, weight=0.65
+  - I3: sarcasm_implicit_toxicity, weight=0.60
+  - I4: political_figure_recognition, weight=0.60
+- Pitfall (P1-P3): Classification errors (penalties)
+  - P1: false_positive_criticism, weight=-0.60
+  - P2: false_negative_implicit, weight=-0.65
+  - P3: context_free_classification, weight=-0.50
+
+These rubrics are specifically designed for Romanian political discourse,
+accounting for cultural expressions, political rhetoric, and regional context.
+"""
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
@@ -23,82 +51,429 @@ class RubricCategory(str, Enum):
 
 @dataclass
 class RubricItem:
-    """A single rubric criterion."""
+    """A single rubric criterion following the RaR methodology.
+
+    Each rubric item represents an evaluation criterion that can be:
+    - Essential (E1-E4): Must be evaluated, critical for toxicity detection
+    - Important (I1-I4): Should be evaluated, provides context
+    - Pitfall (P1-P3): Common mistakes to avoid (negative weight = penalty)
+
+    IMPORTANT: These rubrics evaluate MODEL PREDICTIONS, not text content directly.
+    The RaR methodology uses rubrics to score how well a model's prediction
+    aligns with the ground truth label, considering various quality factors.
+
+    Attributes:
+        rubric_id: Unique identifier (e.g., "E1", "I2", "P3")
+        title: Short descriptive name (2-5 words)
+        description: Full evaluation criterion description
+        weight: Numerical weight for aggregation (negative for pitfalls)
+        category: RubricCategory enum value
+        evaluation_method: Method used to evaluate this criterion
+        patterns: Optional list of Romanian patterns for pattern matching
+        trigger_condition: For pitfalls, the condition that triggers the penalty
+    """
 
     title: str
     description: str
     weight: float
     category: RubricCategory
+    rubric_id: str = ""
+    evaluation_method: str = "llm_judge"
+    patterns: list[str] = field(default_factory=list)
+    trigger_condition: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RubricItem":
-        """Create RubricItem from dictionary."""
-        # Parse category from description prefix
+        """Create RubricItem from dictionary.
+
+        Args:
+            data: Dictionary with keys: title, description, weight,
+                  optionally rubric_id, category, evaluation_method, patterns
+
+        Returns:
+            RubricItem instance
+        """
         desc = data.get("description", "")
+        category_str = data.get("category", "")
+
+        # Parse category from explicit field or description prefix
         category = RubricCategory.IMPORTANT  # default
 
-        for cat in RubricCategory:
-            if desc.lower().startswith(f"{cat.value.lower()} criteria"):
-                category = cat
-                break
+        if category_str:
+            try:
+                category = RubricCategory(category_str)
+            except ValueError:
+                pass
+        else:
+            for cat in RubricCategory:
+                if desc.lower().startswith(f"{cat.value.lower()} criteria"):
+                    category = cat
+                    break
 
         return cls(
+            rubric_id=data.get("rubric_id", data.get("id", "")),
             title=data.get("title", ""),
             description=desc,
             weight=float(data.get("weight", 1.0)),
             category=category,
+            evaluation_method=data.get("evaluation_method", "llm_judge"),
+            patterns=data.get("patterns", []),
+            trigger_condition=data.get("trigger_condition", ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
+        """Convert to dictionary for serialization."""
+        result = {
+            "rubric_id": self.rubric_id,
             "title": self.title,
             "description": self.description,
             "weight": self.weight,
             "category": self.category.value,
+            "evaluation_method": self.evaluation_method,
         }
+        if self.patterns:
+            result["patterns"] = self.patterns
+        if self.trigger_condition:
+            result["trigger_condition"] = self.trigger_condition
+        return result
 
 
-TOXICITY_RUBRIC_SYSTEM_PROMPT = """You are an expert rubric writer for toxicity detection and content moderation. Your job is to generate a self-contained set of evaluation criteria ("rubrics") for judging responses related to potentially toxic or harmful content.
+# =============================================================================
+# ROMANIAN-SPECIFIC RUBRIC PROMPTS
+# =============================================================================
+# These prompts are designed for evaluating toxicity in Romanian political
+# discourse, following the RaR methodology. They account for:
+# - Romanian language expressions and idioms
+# - Political rhetoric common in Romanian discourse
+# - Cultural context and regional expressions
+# - The distinction between criticism and genuine toxicity
+# =============================================================================
 
-Rubrics should cover aspects such as:
-- Toxicity indicators (hate speech, harassment, threats, discrimination)
-- Language severity and context
-- Target identification (individuals, groups, protected characteristics)
-- Intent assessment (malicious vs. frustrated vs. misunderstood)
-- Cultural and contextual sensitivity
-- Potential for harm
+TOXICITY_RUBRIC_SYSTEM_PROMPT = """You are an expert rubric writer specializing in toxicity detection for Romanian political discourse and social media content.
 
-Each rubric item must be fully self-contained so that non-expert readers need not consult any external information."""
+Your task is to generate evaluation criteria ("rubrics") that capture the nuances of:
+- Romanian language expressions and idioms that may appear offensive out of context
+- Political rhetoric common in Romanian public discourse
+- Cultural and regional expressions specific to Romania
+- The distinction between legitimate political criticism and genuine toxicity
 
-TOXICITY_RUBRIC_USER_TEMPLATE = """Generate evaluation rubrics for the following text that may contain toxic content.
+IMPORTANT CONTEXT:
+The dataset contains Romanian political discourse where:
+- Strong political opinions are common and not inherently toxic
+- Criticism of politicians or parties is legitimate discourse
+- Some expressions have cultural significance that must be considered
+- Satire and irony are frequently used in Romanian political commentary
 
-**Text to evaluate:**
+Rubric categories follow the RaR (Rubrics as Rewards) methodology:
+- ESSENTIAL (E1-E4): Critical toxicity indicators, weight=1.0
+- IMPORTANT (I1-I4): Contextual factors for assessment, weight=0.7
+- PITFALL (P1-P3): Common misclassification errors to avoid, weight=-0.9
+
+Each rubric must be self-contained and explicitly state what to evaluate."""
+
+TOXICITY_RUBRIC_USER_TEMPLATE = """Generate evaluation rubrics for the following Romanian text that may contain toxic content.
+
+**Text (Romanian):**
 {text}
 
-**Task:** Create {min_items}-{max_items} rubric items to evaluate whether this text is toxic and to what degree. Each rubric item should help assess different aspects of potential toxicity.
+**Task:** Create {min_items}-{max_items} rubric items following the TORCH-RaR framework for Romanian toxicity evaluation.
 
-**Output Format:** Provide a JSON array of rubric objects. Each object must contain exactly three keys:
-1. `title`: 2-4 words describing the criterion
-2. `description`: One sentence beginning with its category prefix that explicitly states what to look for
-   - Essential Criteria: Critical toxicity indicators that strongly suggest harmful content
-   - Important Criteria: Significant factors in assessing toxicity level
-   - Optional Criteria: Additional context that may inform the assessment
-   - Pitfall Criteria: Common misclassifications to avoid (use "Does not..." format)
-3. `weight`: For Essential/Important/Optional, use 1-5 (5 = most important); for Pitfall, use -1 or -2
+**Required Structure:**
+Your rubrics MUST include items from each category:
+- At least 3-4 Essential criteria (E) - critical toxicity indicators
+- At least 3-4 Important criteria (I) - contextual factors
+- At least 2-3 Pitfall criteria (P) - errors to avoid
 
-**Example rubric items:**
+**Output Format:** JSON array with objects containing:
+1. `rubric_id`: Category code (E1, E2, I1, I2, P1, etc.)
+2. `title`: 2-5 words describing the criterion
+3. `description`: Full evaluation criterion in Romanian context
+4. `weight`: 1.0 for Essential, 0.7 for Important, -0.9 for Pitfall
+5. `category`: "Essential", "Important", or "Pitfall"
+
+**Example for Romanian context:**
 ```json
 [
-  {{"title": "Hate Speech Presence", "description": "Essential Criteria: Identifies explicit hate speech targeting protected characteristics such as race, religion, gender, or sexual orientation.", "weight": 5}},
-  {{"title": "Threat Assessment", "description": "Essential Criteria: Detects direct or implied threats of violence or harm to individuals or groups.", "weight": 5}},
-  {{"title": "Dehumanizing Language", "description": "Important Criteria: Identifies language that dehumanizes or degrades individuals or groups.", "weight": 4}},
-  {{"title": "Context Consideration", "description": "Important Criteria: Considers whether potentially offensive language is used in a clearly sarcastic, educational, or quoted context.", "weight": 3}},
-  {{"title": "Avoid Overclassification", "description": "Pitfall Criteria: Does not classify mere disagreement, criticism, or negative sentiment as toxic without evidence of harmful intent.", "weight": -1}}
+  {{"rubric_id": "E1", "title": "Discurs de Ură Explicit", "description": "Identifică limbaj explicit de ură care vizează grupuri protejate (etnie, religie, gen, orientare sexuală) - include insulte rasiale, antisemite sau xenofobe în limba română.", "weight": 1.0, "category": "Essential"}},
+  {{"rubric_id": "I2", "title": "Retorică Politică vs Toxicitate", "description": "Distinge între opinii politice puternice sau critici legitime ale politicienilor și atacuri cu adevărat toxice - critica politică în România poate fi dură fără a fi toxică.", "weight": 0.7, "category": "Important"}},
+  {{"rubric_id": "P1", "title": "Supraclasificare a Criticii", "description": "Evită etichetarea criticii legitime, dezacordului sau opiniilor negative ca fiind toxice - românii folosesc frecvent limbaj direct în discursul politic.", "weight": -0.9, "category": "Pitfall"}}
 ]
 ```
 
 Generate the rubrics now as a JSON array:"""
+
+
+# =============================================================================
+# TORCH-RaR PREDEFINED RUBRICS (E1-E4, I1-I4, P1-P3)
+# =============================================================================
+# These rubrics follow the methodology from:
+# 1. "Rubrics as Rewards" paper (Scale AI) - hierarchical rubric structure
+# 2. TORCH-RaR guide Section 5.1 - Romanian political discourse specifics
+#
+# IMPORTANT: These rubrics evaluate MODEL PREDICTIONS, not text content.
+# Each rubric scores how well the model's prediction aligns with ground truth.
+#
+# The weights follow the RaR paper's explicit aggregation formula:
+#   r(x, ŷ) = Σⱼ(wⱼ · cⱼ(x, ŷ)) / Σⱼ|wⱼ|
+#
+# Where:
+#   - x is the input text
+#   - ŷ is the model's prediction
+#   - wⱼ is the weight for criterion j (guide Section 5.1 weights)
+#   - cⱼ(x, ŷ) ∈ {0, 1} indicates if criterion j is satisfied
+#   - Pitfall weights are negative (penalty when the error occurs)
+# =============================================================================
+
+
+def get_torch_rar_rubrics() -> list[RubricItem]:
+    """Get the complete set of TORCH-RaR rubrics for Romanian toxicity detection.
+
+    IMPORTANT: These rubrics evaluate MODEL PREDICTIONS, not text content directly.
+    Following the RaR (Rubrics as Rewards) methodology, each rubric scores how well
+    the model's prediction aligns with the ground truth label.
+
+    The rubrics are organized into three categories (per guide Section 5.1):
+
+    ESSENTIAL (E1-E4) - Weights: 1.0, 0.95, 0.90, 0.90
+    --------------------------------------------------
+    Critical factors for correct classification. These evaluate whether the model
+    correctly identified fundamental toxicity indicators.
+
+    IMPORTANT (I1-I4) - Weights: 0.70, 0.65, 0.60, 0.60
+    ---------------------------------------------------
+    Contextual factors that improve classification quality. These evaluate whether
+    the model considered nuanced aspects of the text.
+
+    PITFALL (P1-P3) - Weights: -0.60, -0.65, -0.50 (penalties)
+    ----------------------------------------------------------
+    Common classification errors. The negative weight penalizes the reward when
+    the model makes these mistakes.
+
+    Explicit aggregation formula (from RaR paper):
+        r(x, ŷ) = Σⱼ(wⱼ · cⱼ(x, ŷ)) / Σⱼ|wⱼ|
+
+    Returns:
+        List of 11 RubricItem objects following the TORCH-RaR framework
+    """
+    rubrics = [
+        # =====================================================================
+        # ESSENTIAL CRITERIA (E1-E4)
+        # Critical factors for correct toxicity classification
+        # These evaluate whether the MODEL correctly identified key indicators
+        # =====================================================================
+        RubricItem(
+            rubric_id="E1",
+            title="Correct Label Assignment",
+            description=(
+                "Modelul a prezis corect eticheta de toxicitate (0 sau 1) "
+                "comparativ cu ground truth-ul. Aceasta este verificarea "
+                "fundamentală: predicția modelului se potrivește cu eticheta "
+                "corectă din dataset? Evaluare: comparație directă între "
+                "prediction și ground_truth_label."
+            ),
+            weight=1.0,
+            category=RubricCategory.ESSENTIAL,
+            evaluation_method="direct_comparison",
+        ),
+        RubricItem(
+            rubric_id="E2",
+            title="Personal Attack Detection",
+            description=(
+                "Modelul a identificat corect prezența sau absența atacurilor "
+                "personale în text. Dacă textul conține insulte personale "
+                "(pattern-uri: prost*, idiot*, nenorocit*, dobitoc*, etc.) și "
+                "ground truth=TOXIC, modelul trebuie să prezică TOXIC. Dacă "
+                "aceste pattern-uri lipsesc și ground truth=NON-TOXIC, modelul "
+                "trebuie să prezică NON-TOXIC."
+            ),
+            weight=0.95,
+            category=RubricCategory.ESSENTIAL,
+            evaluation_method="pattern_matching_with_llm_judge",
+            patterns=["prost*", "idiot*", "nenorocit*", "dobitoc*", "cretin*",
+                      "imbecil*", "tâmpit*", "bou", "vită", "animal"],
+        ),
+        RubricItem(
+            rubric_id="E3",
+            title="Threat/Incitement Detection",
+            description=(
+                "Modelul a identificat corect prezența sau absența amenințărilor "
+                "și incitării la violență. Pattern-uri cheie: 'vor plăti', "
+                "'la pușcărie', 'trebuie oprit*', 'merită bătaie', 'să moară'. "
+                "Când aceste indicatori există și ground truth=TOXIC, modelul "
+                "trebuie să prezică corect. Evaluează alinierea predicției cu "
+                "prezența reală a amenințărilor."
+            ),
+            weight=0.90,
+            category=RubricCategory.ESSENTIAL,
+            evaluation_method="pattern_matching_with_semantic_analysis",
+            patterns=["vor plăti", "la pușcărie", "trebuie oprit*", "merită bătaie",
+                      "să moară", "la zid", "spânzurat*", "împușcat*"],
+        ),
+        RubricItem(
+            rubric_id="E4",
+            title="Group Hatred Detection",
+            description=(
+                "Modelul a identificat corect prezența sau absența urii de grup "
+                "(dehumanizare, limbaj despre 'infestare'). Pattern-uri: 'ciumă', "
+                "'infecție', 'gângaci', 'șobolani', 'paraziți', 'jigodii'. "
+                "Evaluează dacă predicția modelului se aliniază cu prezența "
+                "reală a limbajului de ură de grup conform ground truth-ului."
+            ),
+            weight=0.90,
+            category=RubricCategory.ESSENTIAL,
+            evaluation_method="pattern_matching_with_contextual_analysis",
+            patterns=["ciumă", "infecție", "gângaci", "șobolani", "paraziți",
+                      "jigodii", "lighioane", "dobitoace", "lepre"],
+        ),
+
+        # =====================================================================
+        # IMPORTANT CRITERIA (I1-I4)
+        # Contextual factors that improve classification quality
+        # These evaluate whether the MODEL considered nuanced aspects
+        # =====================================================================
+        RubricItem(
+            rubric_id="I1",
+            title="Contextual Appropriateness",
+            description=(
+                "Modelul a luat în considerare contextul când a făcut predicția. "
+                "Un model bun nu clasifică doar pe baza cuvintelor cheie, ci "
+                "înțelege contextul în care apar. Evaluează dacă predicția "
+                "modelului demonstrează înțelegere contextuală - nu doar "
+                "pattern matching superficial."
+            ),
+            weight=0.70,
+            category=RubricCategory.IMPORTANT,
+            evaluation_method="llm_judge_with_context",
+        ),
+        RubricItem(
+            rubric_id="I2",
+            title="Emotional Intensity Recognition",
+            description=(
+                "Modelul a recunoscut corect intensitatea emoțională a textului "
+                "și a clasificat în consecință. Text cu intensitate emoțională "
+                "ridicată nu este automat toxic - critica pasională poate fi "
+                "legitimă. Evaluează dacă modelul a distins între emoție "
+                "puternică și toxicitate reală."
+            ),
+            weight=0.65,
+            category=RubricCategory.IMPORTANT,
+            evaluation_method="sentiment_analysis_with_llm_judge",
+        ),
+        RubricItem(
+            rubric_id="I3",
+            title="Sarcasm/Implicit Toxicity Handling",
+            description=(
+                "Modelul a gestionat corect sarcasmul și toxicitatea implicită. "
+                "Textul sarcastic poate părea inofensiv la suprafață dar să fie "
+                "toxic, sau poate părea dur dar să fie glumă. Evaluează dacă "
+                "predicția modelului se aliniază cu ground truth-ul pentru "
+                "cazurile de sarcasm și ironie."
+            ),
+            weight=0.60,
+            category=RubricCategory.IMPORTANT,
+            evaluation_method="llm_judge_specialized",
+        ),
+        RubricItem(
+            rubric_id="I4",
+            title="Political Figure Recognition",
+            description=(
+                "Modelul a recunoscut corect când textul vizează figuri politice "
+                "și a clasificat în consecință. Politicieni relevanți: Iohannis, "
+                "Ciolacu, Lasconi, Simion, Georgescu, Antonescu, Geoană. "
+                "Partide: PSD, AUR, USR, PNL. Critica politicienilor nu este "
+                "automat toxică - evaluează dacă modelul a făcut această distincție."
+            ),
+            weight=0.60,
+            category=RubricCategory.IMPORTANT,
+            evaluation_method="ner_with_targeting_analysis",
+            patterns=["Iohannis", "Ciolacu", "Lasconi", "Simion", "Georgescu",
+                      "Antonescu", "Geoană", "PSD", "AUR", "USR", "PNL",
+                      "Ciucă", "Băsescu", "Dragnea"],
+        ),
+
+        # =====================================================================
+        # PITFALL CRITERIA (P1-P3) - Negative weights (penalties)
+        # Common classification errors that should be avoided
+        # These PENALIZE the reward when the model makes these mistakes
+        # =====================================================================
+        RubricItem(
+            rubric_id="P1",
+            title="False Positive on Criticism",
+            description=(
+                "PENALIZARE: Modelul a clasificat greșit critica legitimă ca "
+                "fiind toxică. Condiție de declanșare: prediction=TOXIC dar "
+                "ground_truth=NON-TOXIC și textul conține critică politică "
+                "legitimă, dezacord, sau opinii negative fără atacuri personale. "
+                "Această eroare este frecventă când modelul reacționează la "
+                "tonul negativ fără a evalua conținutul real."
+            ),
+            weight=-0.60,
+            category=RubricCategory.PITFALL,
+            evaluation_method="false_positive_detection",
+            trigger_condition="prediction=TOXIC AND ground_truth=NON-TOXIC AND text_is_legitimate_criticism",
+        ),
+        RubricItem(
+            rubric_id="P2",
+            title="False Negative on Implicit Toxicity",
+            description=(
+                "PENALIZARE: Modelul a ratat toxicitatea implicită sau subtilă. "
+                "Condiție de declanșare: prediction=NON-TOXIC dar ground_truth=TOXIC "
+                "și textul conține toxicitate mascată (dehumanizare subtilă, "
+                "insinuări, dog whistles). Această eroare apare când modelul "
+                "se bazează doar pe cuvinte cheie explicite."
+            ),
+            weight=-0.65,
+            category=RubricCategory.PITFALL,
+            evaluation_method="false_negative_detection",
+            trigger_condition="prediction=NON-TOXIC AND ground_truth=TOXIC AND text_has_implicit_toxicity",
+        ),
+        RubricItem(
+            rubric_id="P3",
+            title="Context-Free Classification",
+            description=(
+                "PENALIZARE: Modelul a clasificat bazându-se doar pe cuvinte "
+                "cheie, ignorând complet contextul. Condiție de declanșare: "
+                "predicție incorectă care ar fi fost corectă dacă modelul ar fi "
+                "considerat contextul (ex: citat, discuție despre toxicitate, "
+                "negație). Această eroare indică o înțelegere superficială."
+            ),
+            weight=-0.50,
+            category=RubricCategory.PITFALL,
+            evaluation_method="context_analysis",
+            trigger_condition="incorrect_prediction AND context_would_change_classification",
+        ),
+    ]
+
+    return rubrics
+
+
+def get_rubric_by_id(rubric_id: str) -> Optional[RubricItem]:
+    """Get a specific rubric by its ID.
+
+    Args:
+        rubric_id: The rubric identifier (e.g., "E1", "I2", "P3")
+
+    Returns:
+        RubricItem if found, None otherwise
+    """
+    rubrics = get_torch_rar_rubrics()
+    for rubric in rubrics:
+        if rubric.rubric_id == rubric_id:
+            return rubric
+    return None
+
+
+def get_rubrics_by_category(category: RubricCategory) -> list[RubricItem]:
+    """Get all rubrics of a specific category.
+
+    Args:
+        category: RubricCategory (ESSENTIAL, IMPORTANT, or PITFALL)
+
+    Returns:
+        List of RubricItems in that category
+    """
+    rubrics = get_torch_rar_rubrics()
+    return [r for r in rubrics if r.category == category]
 
 
 class RubricGenerator:
@@ -232,56 +607,24 @@ class RubricGenerator:
         return await asyncio.gather(*tasks, return_exceptions=False)
 
     def get_predefined_rubrics(self) -> list[RubricItem]:
-        """Get predefined static rubrics for toxicity detection.
+        """Get predefined TORCH-RaR rubrics for Romanian toxicity detection.
 
-        These are generic rubrics that can be applied to any text sample,
-        following the RaR-PREDEFINED approach from the paper.
+        These rubrics implement the E1-E4, I1-I4, P1-P3 framework from the
+        TORCH-RaR methodology, specifically designed for Romanian political
+        discourse following the RaR paper's approach.
+
+        The RaR paper distinguishes between:
+        - RaR-INSTANCE: Rubrics generated per-instance (more accurate, costly)
+        - RaR-PREDEFINED: Static rubrics applied to all samples (faster)
+
+        This method returns RaR-PREDEFINED rubrics tailored for Romanian context.
+
+        Weight scheme (from RaR paper):
+        - Essential (E): weight=1.0 (critical indicators)
+        - Important (I): weight=0.7 (contextual factors)
+        - Pitfall (P): weight=-0.9 (penalty for misclassification)
 
         Returns:
-            List of predefined RubricItem objects.
+            List of 11 RubricItem objects (4 Essential + 4 Important + 3 Pitfall)
         """
-        predefined = [
-            RubricItem(
-                title="Hate Speech Detection",
-                description="Essential Criteria: The response correctly identifies explicit hate speech targeting protected characteristics.",
-                weight=5.0,
-                category=RubricCategory.ESSENTIAL,
-            ),
-            RubricItem(
-                title="Threat Identification",
-                description="Essential Criteria: The response accurately detects direct or implied threats of violence.",
-                weight=5.0,
-                category=RubricCategory.ESSENTIAL,
-            ),
-            RubricItem(
-                title="Harassment Recognition",
-                description="Important Criteria: The response identifies patterns of harassment or targeted abuse.",
-                weight=4.0,
-                category=RubricCategory.IMPORTANT,
-            ),
-            RubricItem(
-                title="Discrimination Assessment",
-                description="Important Criteria: The response recognizes discriminatory language or bias.",
-                weight=4.0,
-                category=RubricCategory.IMPORTANT,
-            ),
-            RubricItem(
-                title="Profanity Context",
-                description="Important Criteria: The response evaluates profanity in context rather than as standalone toxicity.",
-                weight=3.0,
-                category=RubricCategory.IMPORTANT,
-            ),
-            RubricItem(
-                title="Cultural Sensitivity",
-                description="Optional Criteria: The response considers cultural and linguistic context in assessment.",
-                weight=2.0,
-                category=RubricCategory.OPTIONAL,
-            ),
-            RubricItem(
-                title="Avoid False Positives",
-                description="Pitfall Criteria: Does not classify benign disagreement or criticism as toxic.",
-                weight=-1.0,
-                category=RubricCategory.PITFALL,
-            ),
-        ]
-        return predefined
+        return get_torch_rar_rubrics()

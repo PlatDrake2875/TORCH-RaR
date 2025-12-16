@@ -1,0 +1,168 @@
+{
+  "torch_rar_rubrics": {
+    "description": "TORCH-RaR Rubrics for Romanian Toxicity Detection",
+    "methodology": "Rubrics as Rewards (RaR) - Scale AI",
+    "note": "These rubrics evaluate MODEL PREDICTIONS, not text content directly",
+    "aggregation_formula": "r(x, ŷ) = Σⱼ(wⱼ · cⱼ(x, ŷ)) / Σⱼ|wⱼ|",
+
+    "essential": {
+      "description": "Critical factors for correct toxicity classification",
+      "rubrics": [
+        {
+          "id": "E1",
+          "name": "correct_label_assignment",
+          "title": "Correct Label Assignment",
+          "weight": 1.0,
+          "evaluation_method": "direct_comparison",
+          "description_ro": "Modelul a prezis corect eticheta de toxicitate (0 sau 1) comparativ cu ground truth-ul.",
+          "description_en": "Model predicted the correct toxicity label (0 or 1) compared to ground truth.",
+          "implementation": "Compare prediction with ground_truth_label"
+        },
+        {
+          "id": "E2",
+          "name": "personal_attack_detection",
+          "title": "Personal Attack Detection",
+          "weight": 0.95,
+          "evaluation_method": "pattern_matching_with_llm_judge",
+          "description_ro": "Modelul a identificat corect prezența sau absența atacurilor personale în text.",
+          "description_en": "Model correctly identified presence or absence of personal attacks.",
+          "patterns": ["prost*", "idiot*", "nenorocit*", "dobitoc*", "cretin*", "imbecil*", "tâmpit*", "bou", "vită", "animal"]
+        },
+        {
+          "id": "E3",
+          "name": "threat_incitement_detection",
+          "title": "Threat/Incitement Detection",
+          "weight": 0.90,
+          "evaluation_method": "pattern_matching_with_semantic_analysis",
+          "description_ro": "Modelul a identificat corect prezența sau absența amenințărilor și incitării la violență.",
+          "description_en": "Model correctly identified presence or absence of threats and incitement to violence.",
+          "patterns": ["vor plăti", "la pușcărie", "trebuie oprit*", "merită bătaie", "să moară", "la zid", "spânzurat*", "împușcat*"]
+        },
+        {
+          "id": "E4",
+          "name": "group_hatred_detection",
+          "title": "Group Hatred Detection",
+          "weight": 0.90,
+          "evaluation_method": "pattern_matching_with_contextual_analysis",
+          "description_ro": "Modelul a identificat corect prezența sau absența urii de grup (dehumanizare).",
+          "description_en": "Model correctly identified presence or absence of group hatred (dehumanization).",
+          "patterns": ["ciumă", "infecție", "gângaci", "șobolani", "paraziți", "jigodii", "lighioane", "dobitoace", "lepre"]
+        }
+      ]
+    },
+
+    "important": {
+      "description": "Contextual factors that improve classification quality",
+      "rubrics": [
+        {
+          "id": "I1",
+          "name": "contextual_appropriateness",
+          "title": "Contextual Appropriateness",
+          "weight": 0.70,
+          "evaluation_method": "llm_judge_with_context",
+          "description_ro": "Modelul a luat în considerare contextul când a făcut predicția, nu doar cuvinte cheie.",
+          "description_en": "Model considered context when making prediction, not just keywords."
+        },
+        {
+          "id": "I2",
+          "name": "emotional_intensity_recognition",
+          "title": "Emotional Intensity Recognition",
+          "weight": 0.65,
+          "evaluation_method": "sentiment_analysis_with_llm_judge",
+          "description_ro": "Modelul a recunoscut că intensitatea emoțională ridicată nu înseamnă automat toxicitate.",
+          "description_en": "Model recognized that high emotional intensity doesn't automatically mean toxicity."
+        },
+        {
+          "id": "I3",
+          "name": "sarcasm_implicit_toxicity",
+          "title": "Sarcasm/Implicit Toxicity Handling",
+          "weight": 0.60,
+          "evaluation_method": "llm_judge_specialized",
+          "description_ro": "Modelul a gestionat corect sarcasmul și toxicitatea implicită.",
+          "description_en": "Model correctly handled sarcasm and implicit toxicity."
+        },
+        {
+          "id": "I4",
+          "name": "political_figure_recognition",
+          "title": "Political Figure Recognition",
+          "weight": 0.60,
+          "evaluation_method": "ner_with_targeting_analysis",
+          "description_ro": "Modelul a recunoscut când textul vizează figuri politice și a clasificat în consecință.",
+          "description_en": "Model recognized when text targets political figures and classified accordingly.",
+          "politicians": ["Iohannis", "Ciolacu", "Lasconi", "Simion", "Georgescu", "Antonescu", "Geoană", "Ciucă", "Băsescu", "Dragnea"],
+          "parties": ["PSD", "AUR", "USR", "PNL"]
+        }
+      ]
+    },
+
+    "pitfall": {
+      "description": "Classification errors that should be penalized (negative weights)",
+      "rubrics": [
+        {
+          "id": "P1",
+          "name": "false_positive_criticism",
+          "title": "False Positive on Criticism",
+          "weight": -0.60,
+          "evaluation_method": "false_positive_detection",
+          "description_ro": "PENALIZARE: Modelul a clasificat greșit critica legitimă ca fiind toxică.",
+          "description_en": "PENALTY: Model incorrectly classified legitimate criticism as toxic.",
+          "trigger_condition": "prediction=TOXIC AND ground_truth=NON-TOXIC AND text_is_legitimate_criticism"
+        },
+        {
+          "id": "P2",
+          "name": "false_negative_implicit",
+          "title": "False Negative on Implicit Toxicity",
+          "weight": -0.65,
+          "evaluation_method": "false_negative_detection",
+          "description_ro": "PENALIZARE: Modelul a ratat toxicitatea implicită sau subtilă.",
+          "description_en": "PENALTY: Model missed implicit or subtle toxicity.",
+          "trigger_condition": "prediction=NON-TOXIC AND ground_truth=TOXIC AND text_has_implicit_toxicity"
+        },
+        {
+          "id": "P3",
+          "name": "context_free_classification",
+          "title": "Context-Free Classification",
+          "weight": -0.50,
+          "evaluation_method": "context_analysis",
+          "description_ro": "PENALIZARE: Modelul a clasificat bazându-se doar pe cuvinte cheie, ignorând contextul.",
+          "description_en": "PENALTY: Model classified based only on keywords, ignoring context.",
+          "trigger_condition": "incorrect_prediction AND context_would_change_classification"
+        }
+      ]
+    }
+  },
+
+  "weight_summary": {
+    "essential_weights": [1.0, 0.95, 0.90, 0.90],
+    "important_weights": [0.70, 0.65, 0.60, 0.60],
+    "pitfall_weights": [-0.60, -0.65, -0.50],
+    "total_positive_weight": 6.35,
+    "total_negative_weight": -1.75,
+    "total_absolute_weight": 8.10
+  },
+
+  "example_evaluation": {
+    "input_text": "Ciolacu e un idiot corupt care ar trebui să stea la pușcărie!",
+    "ground_truth_label": 1,
+    "model_prediction": 1,
+    "rubric_scores": {
+      "E1": {"score": 1, "reason": "Prediction matches ground truth"},
+      "E2": {"score": 1, "reason": "Detected 'idiot' - personal attack pattern"},
+      "E3": {"score": 1, "reason": "Detected 'la pușcărie' - incitement pattern"},
+      "E4": {"score": 0, "reason": "No group hatred patterns found"},
+      "I1": {"score": 1, "reason": "Correctly considered political context"},
+      "I2": {"score": 1, "reason": "High emotion correctly linked to toxicity"},
+      "I3": {"score": 1, "reason": "Not sarcasm - genuine attack"},
+      "I4": {"score": 1, "reason": "Correctly identified politician (Ciolacu)"},
+      "P1": {"score": 0, "reason": "Not triggered - prediction was correct"},
+      "P2": {"score": 0, "reason": "Not triggered - toxicity was detected"},
+      "P3": {"score": 0, "reason": "Not triggered - context was considered"}
+    },
+    "reward_calculation": {
+      "formula": "r = (1.0×1 + 0.95×1 + 0.90×1 + 0.90×0 + 0.70×1 + 0.65×1 + 0.60×1 + 0.60×1 + (-0.60)×0 + (-0.65)×0 + (-0.50)×0) / 8.10",
+      "numerator": "1.0 + 0.95 + 0.90 + 0 + 0.70 + 0.65 + 0.60 + 0.60 + 0 + 0 + 0 = 5.40",
+      "denominator": 8.10,
+      "final_reward": 0.667
+    }
+  }
+}

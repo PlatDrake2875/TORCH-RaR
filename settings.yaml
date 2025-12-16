@@ -3,14 +3,14 @@
 
 # LLM Provider Configuration
 # Options: openrouter, vllm, litellm_proxy
-llm_provider: vllm
+llm_provider: openrouter
 
 # =============================================================================
 # OpenRouter Configuration (default provider)
 # =============================================================================
 
 # Get your API key from https://openrouter.ai/keys
-openrouter_api_key: ${OPENROUTER_API_KEY}  # Can use env var or paste key directly
+openrouter_api_key: ${OPENROUTER_API_KEY}  # Set via environment variable
 openrouter_base_url: https://openrouter.ai/api/v1
 
 # Model selection for OpenRouter
@@ -58,8 +58,15 @@ max_retries: 3
 # =============================================================================
 # Reward Weights (for explicit aggregation, following RaR paper)
 # =============================================================================
-
+# NOTE: Individual rubric weights are now defined per-rubric in rubric_generator.py
+# following guide Section 5.1 specifications:
+#
+# Essential (E1-E4): 1.0, 0.95, 0.90, 0.90
+# Important (I1-I4): 0.70, 0.65, 0.60, 0.60
+# Pitfall (P1-P3):  -0.60, -0.65, -0.50 (negative = penalties)
+#
+# These category defaults are used as fallbacks for dynamically generated rubrics:
 weight_essential: 1.0
 weight_important: 0.7
 weight_optional: 0.3
-weight_pitfall: 0.9
+weight_pitfall: -0.6

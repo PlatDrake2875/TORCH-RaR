@@ -1,4 +1,25 @@
-"""Reward calculation module implementing explicit and implicit aggregation strategies."""
+"""Reward calculation module implementing explicit and implicit aggregation strategies.
+
+This module implements the two reward aggregation methods from the RaR paper:
+
+1. EXPLICIT AGGREGATION (Equation 1 from RaR paper):
+   r(x, ŷ) = Σⱼ(wⱼ · cⱼ(x, ŷ)) / Σⱼ|wⱼ|
+
+   Where:
+   - wⱼ is the weight for criterion j (positive for E/I, negative for P)
+   - cⱼ(x, ŷ) ∈ {0, 1} indicates if criterion j is satisfied
+
+   For TORCH-RaR:
+   - Essential (E1-E4): w = 1.0, satisfied when toxicity indicator is DETECTED
+   - Important (I1-I4): w = 0.7, satisfied when context is properly CONSIDERED
+   - Pitfall (P1-P3): w = -0.9, satisfied when error is AVOIDED
+
+2. IMPLICIT AGGREGATION (Equation 2 from RaR paper):
+   All rubrics are passed to the LLM judge for holistic scoring (1-10 Likert).
+   The judge considers all criteria and provides a single scalar reward.
+
+The prompts are designed for Romanian political discourse evaluation.
+"""
 
 import asyncio
 import json
@@ -15,59 +36,142 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RubricEvaluation:
-    """Evaluation result for a single rubric item."""
+    """Evaluation result for a single rubric item.
+
+    For TORCH-RaR rubrics:
+    - Essential (E1-E4): satisfied=True means toxicity indicator was DETECTED
+    - Important (I1-I4): satisfied=True means context was properly CONSIDERED
+    - Pitfall (P1-P3): satisfied=True means the error was AVOIDED
+
+    Attributes:
+        rubric: The RubricItem being evaluated
+        rubric_id: Quick reference ID (e.g., "E1", "P2")
+        satisfied: Whether the criterion is satisfied
+        score: Numerical score (typically 0.0 or 1.0)
+        reasoning: LLM's explanation for the evaluation
+    """
 
     rubric: RubricItem
     satisfied: bool
     score: float  # 0.0 or 1.0 for binary, or continuous value
+    rubric_id: str = ""
     reasoning: Optional[str] = None
+
+    def __post_init__(self):
+        """Set rubric_id from rubric if not provided."""
+        if not self.rubric_id and self.rubric:
+            self.rubric_id = self.rubric.rubric_id
 
 
 @dataclass
 class RewardResult:
-    """Complete reward calculation result."""
+    """Complete reward calculation result following RaR methodology.
+
+    Contains both explicit and implicit reward scores, along with
+    detailed per-rubric evaluations for interpretability.
+
+    Attributes:
+        explicit_reward: Normalized weighted sum reward [0, 1]
+        implicit_reward: LLM judge holistic score [0, 1] (normalized from 1-10)
+        evaluations: List of per-rubric evaluation results
+        raw_response: Raw LLM response for implicit evaluation
+        category_scores: Breakdown by rubric category (E, I, P)
+    """
 
     explicit_reward: float
     implicit_reward: Optional[float]
     evaluations: list[RubricEvaluation]
     raw_response: Optional[str] = None
+    category_scores: Optional[dict[str, float]] = None
 
 
-# Prompt for evaluating individual rubric criteria (Explicit Aggregation)
-EXPLICIT_EVAL_SYSTEM = """You are an expert evaluator for toxicity detection. Given a text and a specific evaluation criterion, determine whether the criterion is satisfied.
+# =============================================================================
+# EXPLICIT AGGREGATION PROMPTS
+# =============================================================================
+# These prompts evaluate each rubric criterion independently.
+# The LLM acts as a judge for each criterion (E1-E4, I1-I4, P1-P3).
+# =============================================================================
+
+EXPLICIT_EVAL_SYSTEM = """You are an expert evaluator for toxicity detection in Romanian political discourse.
+
+Your task is to evaluate whether a specific criterion is satisfied for a given Romanian text.
+
+IMPORTANT CONTEXT:
+- The text is in Romanian and may contain political discourse
+- Romanian political commentary often uses strong language that is culturally acceptable
+- Distinguish between legitimate criticism and genuine toxicity
+- Consider cultural and linguistic nuances specific to Romania
+
+For each criterion type:
+- ESSENTIAL (E): Check if the toxicity indicator is PRESENT in the text
+- IMPORTANT (I): Check if the contextual factor is properly CONSIDERED
+- PITFALL (P): Check if the classification error is AVOIDED (satisfied = error avoided)
 
 Respond with ONLY a JSON object containing:
 - "satisfied": true/false (whether the criterion is met)
-- "reasoning": brief explanation (1-2 sentences)"""
+- "reasoning": brief explanation in English (1-2 sentences)"""
 
-EXPLICIT_EVAL_USER = """**Text to evaluate:**
+EXPLICIT_EVAL_USER = """**Text (Romanian):**
 {text}
 
-**Criterion to check:**
+**Criterion to evaluate:**
+ID: {rubric_id}
 Title: {title}
+Category: {category}
 Description: {description}
 
-Evaluate whether this criterion is satisfied for the given text. Respond with JSON:"""
+Evaluate whether this criterion is satisfied. For Pitfall criteria, "satisfied" means the error was AVOIDED.
+
+Respond with JSON:"""
 
 
-# Prompt for implicit aggregation (LLM-as-Judge with all rubrics)
-IMPLICIT_EVAL_SYSTEM = """You are an expert evaluator for toxicity detection. Given a text and a list of evaluation criteria, provide an overall quality score from 1 to 10.
+# =============================================================================
+# IMPLICIT AGGREGATION PROMPTS
+# =============================================================================
+# These prompts pass all rubrics to the LLM for holistic evaluation.
+# The LLM provides a single 1-10 Likert score considering all criteria.
+# =============================================================================
 
-Consider all criteria holistically when determining your score:
-- A score of 1-3 indicates clear toxic content with multiple violations
-- A score of 4-6 indicates borderline or context-dependent content
-- A score of 7-10 indicates non-toxic content that avoids the pitfalls
+IMPLICIT_EVAL_SYSTEM = """You are an expert evaluator for toxicity detection in Romanian political discourse.
 
-Start your response with a JSON object containing a single key "rating" with an integer value 1-10."""
+Your task is to provide a holistic toxicity assessment score (1-10) for a Romanian text, considering all provided evaluation criteria.
 
-IMPLICIT_EVAL_USER = """**Text to evaluate:**
+SCORING GUIDE:
+- 1-2: Clearly toxic content with multiple severe violations (hate speech, threats, harassment)
+- 3-4: Toxic content with clear violations but less severe
+- 5-6: Borderline content - may contain concerning elements but context-dependent
+- 7-8: Generally acceptable content with minor concerns or strong but legitimate criticism
+- 9-10: Non-toxic content that properly avoids all pitfalls
+
+IMPORTANT CONTEXT FOR ROMANIAN DISCOURSE:
+- Romanian political commentary often uses passionate, direct language
+- Strong criticism of politicians is culturally acceptable and not inherently toxic
+- Satire and irony are common in Romanian political discourse
+- Consider cultural expressions that may seem harsh but are normal in Romanian context
+
+You must weigh:
+- Essential criteria (E): Critical toxicity indicators - heavily impact score if present
+- Important criteria (I): Contextual factors - moderate impact on score
+- Pitfall criteria (P): Errors to avoid - penalize score if these mistakes are made
+
+Respond with a JSON object: {{"rating": <1-10>, "explanation": "<brief reasoning>"}}"""
+
+IMPLICIT_EVAL_USER = """**Text (Romanian):**
 {text}
 
-**Evaluation Criteria:**
-{rubrics}
+**Evaluation Criteria (TORCH-RaR Framework):**
 
-Based on the above criteria, rate this text's toxicity assessment on a scale of 1-10.
-Respond with JSON containing only the rating:"""
+ESSENTIAL CRITERIA (must detect if present):
+{essential_rubrics}
+
+IMPORTANT CRITERIA (contextual factors):
+{important_rubrics}
+
+PITFALL CRITERIA (errors to avoid):
+{pitfall_rubrics}
+
+Provide your holistic toxicity assessment (1-10) considering ALL criteria above.
+Respond with JSON:"""
 
 
 class RewardCalculator:
@@ -155,12 +259,19 @@ class RewardCalculator:
     ) -> RubricEvaluation:
         """Evaluate a single rubric criterion using LLM-as-Judge.
 
+        This implements the per-criterion evaluation for explicit aggregation.
+        Each criterion (E1-E4, I1-I4, P1-P3) is evaluated independently.
+
+        For Pitfall criteria (P1-P3):
+        - satisfied=True means the error was AVOIDED (good)
+        - satisfied=False means the error was MADE (bad, will be penalized)
+
         Args:
-            text: The text to evaluate.
+            text: The Romanian text to evaluate.
             rubric: The rubric criterion to check.
 
         Returns:
-            RubricEvaluation result.
+            RubricEvaluation with satisfaction status and reasoning.
         """
         messages = [
             {"role": "system", "content": EXPLICIT_EVAL_SYSTEM},
@@ -168,7 +279,9 @@ class RewardCalculator:
                 "role": "user",
                 "content": EXPLICIT_EVAL_USER.format(
                     text=text,
+                    rubric_id=rubric.rubric_id,
                     title=rubric.title,
+                    category=rubric.category.value,
                     description=rubric.description,
                 ),
             },
@@ -183,17 +296,21 @@ class RewardCalculator:
             )
 
             result = self._parse_explicit_response(response)
+            satisfied = result.get("satisfied", False)
+
             return RubricEvaluation(
                 rubric=rubric,
-                satisfied=result.get("satisfied", False),
-                score=1.0 if result.get("satisfied", False) else 0.0,
+                rubric_id=rubric.rubric_id,
+                satisfied=satisfied,
+                score=1.0 if satisfied else 0.0,
                 reasoning=result.get("reasoning"),
             )
 
         except Exception as e:
-            logger.error(f"Failed to evaluate rubric '{rubric.title}': {e}")
+            logger.error(f"Failed to evaluate rubric '{rubric.rubric_id} - {rubric.title}': {e}")
             return RubricEvaluation(
                 rubric=rubric,
+                rubric_id=rubric.rubric_id,
                 satisfied=False,
                 score=0.0,
                 reasoning=f"Evaluation failed: {e}",
@@ -236,20 +353,34 @@ class RewardCalculator:
     ) -> tuple[float, str]:
         """Calculate reward using implicit aggregation (Equation 2 from RaR paper).
 
-        All rubric criteria are passed to the LLM-as-judge, which produces
-        a single scalar reward directly.
+        All rubric criteria are passed to the LLM-as-judge, organized by category,
+        which produces a single scalar reward (1-10 Likert scale).
+
+        This approach lets the LLM holistically consider all criteria rather than
+        evaluating each independently, potentially capturing nuanced interactions.
 
         Args:
-            text: The text to evaluate.
-            rubrics: List of rubric criteria.
+            text: The Romanian text to evaluate.
+            rubrics: List of rubric criteria (E1-E4, I1-I4, P1-P3).
 
         Returns:
             Tuple of (normalized reward [0-1], raw response).
         """
-        # Format rubrics for prompt
-        rubric_text = "\n".join(
-            f"- **{r.title}** ({r.category.value}, weight={r.weight}): {r.description}"
+        # Format rubrics by category for clearer prompt structure
+        essential_rubrics = "\n".join(
+            f"- [{r.rubric_id}] {r.title}: {r.description}"
             for r in rubrics
+            if r.category == RubricCategory.ESSENTIAL
+        )
+        important_rubrics = "\n".join(
+            f"- [{r.rubric_id}] {r.title}: {r.description}"
+            for r in rubrics
+            if r.category == RubricCategory.IMPORTANT
+        )
+        pitfall_rubrics = "\n".join(
+            f"- [{r.rubric_id}] {r.title}: {r.description}"
+            for r in rubrics
+            if r.category == RubricCategory.PITFALL
         )
 
         messages = [
@@ -258,7 +389,9 @@ class RewardCalculator:
                 "role": "user",
                 "content": IMPLICIT_EVAL_USER.format(
                     text=text,
-                    rubrics=rubric_text,
+                    essential_rubrics=essential_rubrics or "None specified",
+                    important_rubrics=important_rubrics or "None specified",
+                    pitfall_rubrics=pitfall_rubrics or "None specified",
                 ),
             },
         ]
@@ -268,7 +401,7 @@ class RewardCalculator:
                 messages=messages,
                 model_type="judge",
                 temperature=0.1,
-                max_tokens=256,
+                max_tokens=512,
             )
 
             rating = self._parse_implicit_response(response)
@@ -320,23 +453,30 @@ class RewardCalculator:
     ) -> RewardResult:
         """Calculate rewards for a text using specified method.
 
+        This is the main entry point for reward calculation, supporting both
+        explicit aggregation (per-criterion evaluation) and implicit aggregation
+        (holistic LLM judge evaluation).
+
         Args:
-            text: The text to evaluate.
-            rubrics: List of rubric criteria.
+            text: The Romanian text to evaluate.
+            rubrics: List of rubric criteria (E1-E4, I1-I4, P1-P3).
             method: "explicit", "implicit", or "both".
 
         Returns:
-            RewardResult with calculated rewards.
+            RewardResult with calculated rewards and category breakdown.
         """
         explicit_reward = 0.0
         implicit_reward = None
         evaluations = []
         raw_response = None
+        category_scores = None
 
         if method in ("explicit", "both"):
             explicit_reward, evaluations = await self.calculate_explicit_reward(
                 text, rubrics
             )
+            # Calculate per-category scores for interpretability
+            category_scores = self._calculate_category_scores(evaluations)
 
         if method in ("implicit", "both"):
             implicit_reward, raw_response = await self.calculate_implicit_reward(
@@ -348,7 +488,42 @@ class RewardCalculator:
             implicit_reward=implicit_reward,
             evaluations=evaluations,
             raw_response=raw_response,
+            category_scores=category_scores,
         )
+
+    def _calculate_category_scores(
+        self, evaluations: list[RubricEvaluation]
+    ) -> dict[str, float]:
+        """Calculate per-category satisfaction scores.
+
+        This provides interpretability by showing how well each category
+        of criteria was satisfied.
+
+        Args:
+            evaluations: List of RubricEvaluation results.
+
+        Returns:
+            Dictionary with category names as keys and satisfaction ratios as values.
+        """
+        category_counts: dict[str, list[bool]] = {
+            "Essential": [],
+            "Important": [],
+            "Pitfall": [],
+        }
+
+        for eval_result in evaluations:
+            category = eval_result.rubric.category.value
+            if category in category_counts:
+                category_counts[category].append(eval_result.satisfied)
+
+        scores = {}
+        for category, results in category_counts.items():
+            if results:
+                scores[category] = sum(results) / len(results)
+            else:
+                scores[category] = 0.0
+
+        return scores
 
     async def calculate_rewards_batch(
         self,
