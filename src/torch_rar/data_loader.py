@@ -9,6 +9,7 @@ import pandas as pd
 from datasets import Dataset, DatasetDict, load_dataset
 
 from torch_rar.config import Settings
+from torch_rar.exceptions import DatasetError
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +90,12 @@ class DatasetLoader:
             return self._dataset
         except Exception as e:
             logger.error(f"Failed to load dataset: {e}")
-            raise
+            raise DatasetError(f"Failed to load dataset '{name}': {e}") from e
 
     def get_column_names(self) -> list[str]:
         """Get column names from loaded dataset."""
         if self._dataset is None:
-            raise ValueError("Dataset not loaded. Call load() first.")
+            raise DatasetError("Dataset not loaded. Call load() first.")
         return self._dataset.column_names
 
     def infer_text_column(self) -> str:
@@ -102,9 +103,12 @@ class DatasetLoader:
 
         Returns:
             The most likely text column name.
+
+        Raises:
+            DatasetError: If dataset not loaded or text column cannot be inferred.
         """
         if self._dataset is None:
-            raise ValueError("Dataset not loaded. Call load() first.")
+            raise DatasetError("Dataset not loaded. Call load() first.")
 
         columns = self.get_column_names()
 
@@ -120,16 +124,19 @@ class DatasetLoader:
             if isinstance(sample, str):
                 return col
 
-        raise ValueError(f"Could not infer text column from: {columns}")
+        raise DatasetError(f"Could not infer text column from: {columns}")
 
     def infer_label_column(self) -> Optional[str]:
         """Infer the label column name from the dataset.
 
         Returns:
             The most likely label column name, or None if not found.
+
+        Raises:
+            DatasetError: If dataset not loaded.
         """
         if self._dataset is None:
-            raise ValueError("Dataset not loaded. Call load() first.")
+            raise DatasetError("Dataset not loaded. Call load() first.")
 
         columns = self.get_column_names()
 
@@ -156,9 +163,12 @@ class DatasetLoader:
 
         Yields:
             ToxicitySample objects.
+
+        Raises:
+            DatasetError: If dataset not loaded.
         """
         if self._dataset is None:
-            raise ValueError("Dataset not loaded. Call load() first.")
+            raise DatasetError("Dataset not loaded. Call load() first.")
 
         text_col = text_column or self.infer_text_column()
         label_col = label_column or self.infer_label_column()

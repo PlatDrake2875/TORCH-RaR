@@ -10,11 +10,26 @@ Key components:
 - AugmentationPipeline: End-to-end dataset augmentation workflow
 """
 
-from torch_rar.config import Settings, load_settings
-from torch_rar.data_loader import DatasetLoader
+from torch_rar.config import RubricWeights, Settings, get_settings, load_settings, reset_settings
+from torch_rar.data_loader import AugmentedSample, DatasetLoader, ToxicitySample
+from torch_rar.exceptions import (
+    ConfigurationError,
+    DatasetError,
+    JSONParseError,
+    LLMClientError,
+    RewardCalculationError,
+    RubricGenerationError,
+    TorchRarError,
+    ValidationError,
+)
+from torch_rar.json_utils import (
+    extract_boolean_from_response,
+    extract_json_from_response,
+    extract_rating_from_response,
+)
 from torch_rar.llm_client import LLMClient
-from torch_rar.pipeline import AugmentationPipeline, run_pipeline
-from torch_rar.reward_calculator import RewardCalculator
+from torch_rar.pipeline import AugmentationPipeline, PipelineStats, run_pipeline
+from torch_rar.reward_calculator import RewardCalculator, RewardResult, RubricEvaluation
 from torch_rar.rubric_generator import (
     RubricCategory,
     RubricGenerator,
@@ -28,7 +43,23 @@ __version__ = "0.1.0"
 __all__ = [
     # Configuration
     "Settings",
+    "RubricWeights",
     "load_settings",
+    "get_settings",
+    "reset_settings",
+    # Exceptions
+    "TorchRarError",
+    "ConfigurationError",
+    "LLMClientError",
+    "JSONParseError",
+    "RubricGenerationError",
+    "RewardCalculationError",
+    "DatasetError",
+    "ValidationError",
+    # JSON Utilities
+    "extract_json_from_response",
+    "extract_boolean_from_response",
+    "extract_rating_from_response",
     # LLM Client
     "LLMClient",
     # Rubric Generation
@@ -40,9 +71,14 @@ __all__ = [
     "get_rubrics_by_category",
     # Reward Calculation
     "RewardCalculator",
+    "RewardResult",
+    "RubricEvaluation",
     # Data Loading
     "DatasetLoader",
+    "ToxicitySample",
+    "AugmentedSample",
     # Pipeline
     "AugmentationPipeline",
+    "PipelineStats",
     "run_pipeline",
 ]

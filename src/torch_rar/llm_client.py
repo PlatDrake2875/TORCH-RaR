@@ -1,7 +1,6 @@
 """LLM client wrapper using LiteLLM for unified API access."""
 
 import asyncio
-import json
 import logging
 from typing import Any, Optional
 
@@ -14,6 +13,8 @@ from tenacity import (
 )
 
 from torch_rar.config import LLMProvider, Settings
+from torch_rar.exceptions import LLMClientError
+from torch_rar.json_utils import extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +104,18 @@ class LLMClient:
         try:
             response = await litellm.acompletion(**kwargs)
             return response.choices[0].message.content
+        except litellm.exceptions.RateLimitError:
+            # Let tenacity handle rate limit retries
+            raise
+        except litellm.exceptions.AuthenticationError as e:
+            logger.error(f"LLM authentication failed: {e}")
+            raise LLMClientError(f"Authentication failed: {e}") from e
+        except litellm.exceptions.APIConnectionError as e:
+            logger.error(f"LLM connection failed: {e}")
+            raise LLMClientError(f"Connection failed: {e}") from e
         except Exception as e:
             logger.error(f"LLM completion failed: {e}")
-            raise
+            raise LLMClientError(f"Completion failed: {e}") from e
 
     async def complete_json(
         self,
@@ -133,16 +143,7 @@ class LLMClient:
             response_format={"type": "json_object"},
         )
 
-        # Extract JSON from response (handle markdown code blocks)
-        text = response.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-
-        return json.loads(text.strip())
+        return extract_json_from_response(response, expected_type="object")
 
     async def complete_batch(
         self,
@@ -150,7 +151,7 @@ class LLMClient:
         model_type: str = "judge",
         temperature: float = 0.7,
         max_tokens: int = 4096,
-    ) -> list[str]:
+    ) -> list[Optional[str]]:
         """Generate completions for multiple message sets concurrently.
 
         Args:
@@ -160,7 +161,7 @@ class LLMClient:
             max_tokens: Maximum tokens in response.
 
         Returns:
-            List of generated responses.
+            List of generated responses. Failed requests return None.
         """
         semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
 
@@ -174,7 +175,18 @@ class LLMClient:
                 )
 
         tasks = [limited_complete(messages) for messages in messages_list]
-        return await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results, converting exceptions to None
+        processed: list[Optional[str]] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Batch request {i} failed: {result}")
+                processed.append(None)
+            else:
+                processed.append(result)
+
+        return processed
 
     def complete_sync(
         self,

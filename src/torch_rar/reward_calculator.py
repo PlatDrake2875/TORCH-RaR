@@ -22,12 +22,17 @@ The prompts are designed for Romanian political discourse evaluation.
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from torch_rar.config import Settings
+from torch_rar.exceptions import JSONParseError, RewardCalculationError, ValidationError
+from torch_rar.json_utils import (
+    extract_boolean_from_response,
+    extract_json_from_response,
+    extract_rating_from_response,
+)
 from torch_rar.llm_client import LLMClient
 from torch_rar.rubric_generator import RubricCategory, RubricItem
 
@@ -216,8 +221,6 @@ class RewardCalculator:
         Returns:
             Tuple of (normalized reward, list of evaluations).
         """
-        evaluations = []
-
         # Evaluate each criterion in parallel
         semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
 
@@ -226,7 +229,23 @@ class RewardCalculator:
                 return await self._evaluate_single_rubric(text, rubric)
 
         tasks = [eval_rubric(r) for r in rubrics]
-        evaluations = await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results, handling failed evaluations gracefully
+        evaluations: list[RubricEvaluation] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Rubric evaluation {i} failed: {result}")
+                # Create a failed evaluation with score 0
+                evaluations.append(RubricEvaluation(
+                    rubric=rubrics[i],
+                    rubric_id=rubrics[i].rubric_id,
+                    satisfied=False,
+                    score=0.0,
+                    reasoning=f"Evaluation failed: {result}",
+                ))
+            else:
+                evaluations.append(result)
 
         # Calculate normalized reward
         total_weight = sum(abs(r.weight) for r in rubrics)
@@ -318,33 +337,12 @@ class RewardCalculator:
 
     def _parse_explicit_response(self, response: str) -> dict[str, Any]:
         """Parse the explicit evaluation response."""
-        text = response.strip()
-
-        # Extract JSON
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            text = text[start:end]
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            text = text[start:end]
-
-        if "{" in text:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            text = text[start:end]
-
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Try to extract boolean from text
-            lower = response.lower()
-            if "satisfied" in lower and "true" in lower:
-                return {"satisfied": True, "reasoning": response}
-            elif "not satisfied" in lower or "false" in lower:
-                return {"satisfied": False, "reasoning": response}
-            return {"satisfied": False, "reasoning": "Could not parse response"}
+            return extract_json_from_response(response, expected_type="object")
+        except JSONParseError:
+            # Fall back to boolean extraction from text
+            satisfied = extract_boolean_from_response(response)
+            return {"satisfied": satisfied, "reasoning": response}
 
     async def calculate_implicit_reward(
         self,
@@ -415,35 +413,7 @@ class RewardCalculator:
 
     def _parse_implicit_response(self, response: str) -> int:
         """Parse the implicit evaluation response to extract rating."""
-        text = response.strip()
-
-        # Extract JSON
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            text = text[start:end]
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            text = text[start:end]
-
-        if "{" in text:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            text = text[start:end]
-
-        try:
-            data = json.loads(text)
-            rating = int(data.get("rating", 5))
-            return max(1, min(10, rating))
-        except (json.JSONDecodeError, ValueError, TypeError):
-            # Try to find a number in the response
-            import re
-
-            numbers = re.findall(r"\b([1-9]|10)\b", response)
-            if numbers:
-                return int(numbers[0])
-            return 5  # Default to middle score
+        return extract_rating_from_response(response, min_val=1, max_val=10)
 
     async def calculate_reward(
         self,
@@ -464,24 +434,41 @@ class RewardCalculator:
 
         Returns:
             RewardResult with calculated rewards and category breakdown.
+
+        Raises:
+            ValidationError: If text is empty or rubrics are missing.
+            RewardCalculationError: If reward calculation fails.
         """
+        # Input validation
+        if not text or not text.strip():
+            raise ValidationError("Text cannot be empty for reward calculation")
+        if not rubrics:
+            raise ValidationError("At least one rubric is required for reward calculation")
+        if method not in ("explicit", "implicit", "both"):
+            raise ValidationError(f"Invalid method '{method}'. Must be 'explicit', 'implicit', or 'both'")
+
         explicit_reward = 0.0
         implicit_reward = None
         evaluations = []
         raw_response = None
         category_scores = None
 
-        if method in ("explicit", "both"):
-            explicit_reward, evaluations = await self.calculate_explicit_reward(
-                text, rubrics
-            )
-            # Calculate per-category scores for interpretability
-            category_scores = self._calculate_category_scores(evaluations)
+        try:
+            if method in ("explicit", "both"):
+                explicit_reward, evaluations = await self.calculate_explicit_reward(
+                    text, rubrics
+                )
+                # Calculate per-category scores for interpretability
+                category_scores = self._calculate_category_scores(evaluations)
 
-        if method in ("implicit", "both"):
-            implicit_reward, raw_response = await self.calculate_implicit_reward(
-                text, rubrics
-            )
+            if method in ("implicit", "both"):
+                implicit_reward, raw_response = await self.calculate_implicit_reward(
+                    text, rubrics
+                )
+        except ValidationError:
+            raise
+        except Exception as e:
+            raise RewardCalculationError(f"Reward calculation failed: {e}") from e
 
         return RewardResult(
             explicit_reward=explicit_reward,
@@ -530,7 +517,7 @@ class RewardCalculator:
         texts: list[str],
         rubrics_list: list[list[RubricItem]],
         method: str = "both",
-    ) -> list[RewardResult]:
+    ) -> list[Optional[RewardResult]]:
         """Calculate rewards for multiple texts.
 
         Args:
@@ -539,7 +526,7 @@ class RewardCalculator:
             method: "explicit", "implicit", or "both".
 
         Returns:
-            List of RewardResult objects.
+            List of RewardResult objects. Failed calculations return None.
         """
         semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
 
@@ -548,4 +535,15 @@ class RewardCalculator:
                 return await self.calculate_reward(text, rubrics, method)
 
         tasks = [limited_calc(t, r) for t, r in zip(texts, rubrics_list)]
-        return await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results, converting exceptions to None
+        processed: list[Optional[RewardResult]] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Batch reward calculation {i} failed: {result}")
+                processed.append(None)
+            else:
+                processed.append(result)
+
+        return processed

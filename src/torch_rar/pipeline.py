@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from torch_rar.config import Settings
 from torch_rar.data_loader import AugmentedSample, DatasetLoader, ToxicitySample
+from torch_rar.exceptions import TorchRarError, ValidationError
 from torch_rar.llm_client import LLMClient
 from torch_rar.reward_calculator import RewardCalculator
 from torch_rar.rubric_generator import RubricGenerator
@@ -61,6 +62,11 @@ class AugmentationPipeline:
         Returns:
             AugmentedSample with rubrics and rewards, or None if processing failed.
         """
+        # Input validation
+        if not sample.text or not sample.text.strip():
+            logger.warning(f"Sample {sample.id} has empty text, skipping")
+            return None
+
         try:
             # Generate or use predefined rubrics
             if use_predefined_rubrics:
@@ -86,8 +92,14 @@ class AugmentationPipeline:
                 reward_implicit=reward_result.implicit_reward,
             )
 
+        except ValidationError as e:
+            logger.warning(f"Validation error for sample {sample.id}: {e}")
+            return None
+        except TorchRarError as e:
+            logger.error(f"Processing error for sample {sample.id}: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Failed to process sample {sample.id}: {e}")
+            logger.error(f"Unexpected error processing sample {sample.id}: {e}")
             return None
 
     async def run(

@@ -28,13 +28,15 @@ These rubrics are specifically designed for Romanian political discourse,
 accounting for cultural expressions, political rhetoric, and regional context.
 """
 
-import json
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from torch_rar.config import Settings
+from torch_rar.config import RubricWeights, Settings
+from torch_rar.exceptions import JSONParseError, RubricGenerationError, ValidationError
+from torch_rar.json_utils import extract_json_from_response
 from torch_rar.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -271,7 +273,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "corectă din dataset? Evaluare: comparație directă între "
                 "prediction și ground_truth_label."
             ),
-            weight=1.0,
+            weight=RubricWeights.E1_CORRECT_LABEL,
             category=RubricCategory.ESSENTIAL,
             evaluation_method="direct_comparison",
         ),
@@ -286,7 +288,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "aceste pattern-uri lipsesc și ground truth=NON-TOXIC, modelul "
                 "trebuie să prezică NON-TOXIC."
             ),
-            weight=0.95,
+            weight=RubricWeights.E2_PERSONAL_ATTACK,
             category=RubricCategory.ESSENTIAL,
             evaluation_method="pattern_matching_with_llm_judge",
             patterns=["prost*", "idiot*", "nenorocit*", "dobitoc*", "cretin*",
@@ -303,7 +305,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "trebuie să prezică corect. Evaluează alinierea predicției cu "
                 "prezența reală a amenințărilor."
             ),
-            weight=0.90,
+            weight=RubricWeights.E3_THREAT_DETECTION,
             category=RubricCategory.ESSENTIAL,
             evaluation_method="pattern_matching_with_semantic_analysis",
             patterns=["vor plăti", "la pușcărie", "trebuie oprit*", "merită bătaie",
@@ -319,7 +321,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "Evaluează dacă predicția modelului se aliniază cu prezența "
                 "reală a limbajului de ură de grup conform ground truth-ului."
             ),
-            weight=0.90,
+            weight=RubricWeights.E4_GROUP_HATRED,
             category=RubricCategory.ESSENTIAL,
             evaluation_method="pattern_matching_with_contextual_analysis",
             patterns=["ciumă", "infecție", "gângaci", "șobolani", "paraziți",
@@ -341,7 +343,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "modelului demonstrează înțelegere contextuală - nu doar "
                 "pattern matching superficial."
             ),
-            weight=0.70,
+            weight=RubricWeights.I1_CONTEXTUAL,
             category=RubricCategory.IMPORTANT,
             evaluation_method="llm_judge_with_context",
         ),
@@ -355,7 +357,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "legitimă. Evaluează dacă modelul a distins între emoție "
                 "puternică și toxicitate reală."
             ),
-            weight=0.65,
+            weight=RubricWeights.I2_EMOTIONAL,
             category=RubricCategory.IMPORTANT,
             evaluation_method="sentiment_analysis_with_llm_judge",
         ),
@@ -369,7 +371,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "predicția modelului se aliniază cu ground truth-ul pentru "
                 "cazurile de sarcasm și ironie."
             ),
-            weight=0.60,
+            weight=RubricWeights.I3_SARCASM,
             category=RubricCategory.IMPORTANT,
             evaluation_method="llm_judge_specialized",
         ),
@@ -383,7 +385,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "Partide: PSD, AUR, USR, PNL. Critica politicienilor nu este "
                 "automat toxică - evaluează dacă modelul a făcut această distincție."
             ),
-            weight=0.60,
+            weight=RubricWeights.I4_POLITICAL,
             category=RubricCategory.IMPORTANT,
             evaluation_method="ner_with_targeting_analysis",
             patterns=["Iohannis", "Ciolacu", "Lasconi", "Simion", "Georgescu",
@@ -407,7 +409,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "Această eroare este frecventă când modelul reacționează la "
                 "tonul negativ fără a evalua conținutul real."
             ),
-            weight=-0.60,
+            weight=RubricWeights.P1_FALSE_POSITIVE,
             category=RubricCategory.PITFALL,
             evaluation_method="false_positive_detection",
             trigger_condition="prediction=TOXIC AND ground_truth=NON-TOXIC AND text_is_legitimate_criticism",
@@ -422,7 +424,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "insinuări, dog whistles). Această eroare apare când modelul "
                 "se bazează doar pe cuvinte cheie explicite."
             ),
-            weight=-0.65,
+            weight=RubricWeights.P2_FALSE_NEGATIVE,
             category=RubricCategory.PITFALL,
             evaluation_method="false_negative_detection",
             trigger_condition="prediction=NON-TOXIC AND ground_truth=TOXIC AND text_has_implicit_toxicity",
@@ -437,7 +439,7 @@ def get_torch_rar_rubrics() -> list[RubricItem]:
                 "considerat contextul (ex: citat, discuție despre toxicitate, "
                 "negație). Această eroare indică o înțelegere superficială."
             ),
-            weight=-0.50,
+            weight=RubricWeights.P3_CONTEXT_FREE,
             category=RubricCategory.PITFALL,
             evaluation_method="context_analysis",
             trigger_condition="incorrect_prediction AND context_would_change_classification",
@@ -510,7 +512,17 @@ class RubricGenerator:
 
         Returns:
             List of RubricItem objects.
+
+        Raises:
+            ValidationError: If text is empty or exceeds limits.
+            RubricGenerationError: If rubric generation fails.
         """
+        # Input validation
+        if not text or not text.strip():
+            raise ValidationError("Text cannot be empty for rubric generation")
+        if len(text) > 50000:
+            raise ValidationError("Text exceeds maximum length of 50000 characters")
+
         min_items = min_items or self.settings.min_rubric_items
         max_items = max_items or self.settings.max_rubric_items
 
@@ -540,9 +552,12 @@ class RubricGenerator:
             logger.info(f"Generated {len(rubrics)} rubrics for text sample")
             return rubrics
 
+        except JSONParseError as e:
+            logger.error(f"Failed to parse rubrics response: {e}")
+            raise RubricGenerationError(f"Failed to parse rubrics: {e}") from e
         except Exception as e:
             logger.error(f"Failed to generate rubrics: {e}")
-            raise
+            raise RubricGenerationError(f"Failed to generate rubrics: {e}") from e
 
     def _parse_rubrics(self, response: str) -> list[RubricItem]:
         """Parse rubrics from LLM response.
@@ -552,33 +567,12 @@ class RubricGenerator:
 
         Returns:
             List of parsed RubricItem objects.
+
+        Raises:
+            JSONParseError: If JSON cannot be extracted or parsed.
         """
-        # Extract JSON from response
-        text = response.strip()
-
-        # Handle markdown code blocks
-        if "```json" in text:
-            start = text.find("```json") + 7
-            end = text.find("```", start)
-            text = text[start:end]
-        elif "```" in text:
-            start = text.find("```") + 3
-            end = text.find("```", start)
-            text = text[start:end]
-
-        # Find JSON array
-        if "[" in text:
-            start = text.find("[")
-            end = text.rfind("]") + 1
-            text = text[start:end]
-
-        try:
-            data = json.loads(text)
-            return [RubricItem.from_dict(item) for item in data]
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse rubrics JSON: {e}")
-            logger.debug(f"Raw response: {response}")
-            return []
+        data = extract_json_from_response(response, expected_type="array")
+        return [RubricItem.from_dict(item) for item in data]
 
     async def generate_rubrics_batch(
         self,
@@ -592,10 +586,8 @@ class RubricGenerator:
             reference_answers: Optional list of reference answers.
 
         Returns:
-            List of rubric lists, one per input text.
+            List of rubric lists, one per input text. Failed generations return empty lists.
         """
-        import asyncio
-
         refs = reference_answers or [None] * len(texts)
         semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
 
@@ -604,7 +596,18 @@ class RubricGenerator:
                 return await self.generate_rubrics(text, ref)
 
         tasks = [limited_generate(t, r) for t, r in zip(texts, refs)]
-        return await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results, converting exceptions to empty lists
+        processed: list[list[RubricItem]] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Batch rubric generation {i} failed: {result}")
+                processed.append([])
+            else:
+                processed.append(result)
+
+        return processed
 
     def get_predefined_rubrics(self) -> list[RubricItem]:
         """Get predefined TORCH-RaR rubrics for Romanian toxicity detection.

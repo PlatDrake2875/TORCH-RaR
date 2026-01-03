@@ -10,6 +10,43 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class RubricWeights:
+    """Standard weights for TORCH-RaR rubric categories.
+
+    These weights follow the RaR paper Section 5.1 methodology for
+    Romanian toxicity detection. Weights are used in explicit aggregation:
+
+        r(x, ŷ) = Σⱼ(wⱼ · cⱼ(x, ŷ)) / Σⱼ|wⱼ|
+
+    Essential criteria have highest weights (critical indicators).
+    Important criteria have moderate weights (contextual factors).
+    Pitfall criteria have negative weights (penalties for errors).
+    """
+
+    # Essential criteria weights (E1-E4)
+    E1_CORRECT_LABEL = 1.0
+    E2_PERSONAL_ATTACK = 0.95
+    E3_THREAT_DETECTION = 0.90
+    E4_GROUP_HATRED = 0.90
+
+    # Important criteria weights (I1-I4)
+    I1_CONTEXTUAL = 0.70
+    I2_EMOTIONAL = 0.65
+    I3_SARCASM = 0.60
+    I4_POLITICAL = 0.60
+
+    # Pitfall criteria weights (P1-P3) - negative for penalties
+    P1_FALSE_POSITIVE = -0.60
+    P2_FALSE_NEGATIVE = -0.65
+    P3_CONTEXT_FREE = -0.50
+
+    # Default category weights for prompt-based rubrics
+    ESSENTIAL_DEFAULT = 1.0
+    IMPORTANT_DEFAULT = 0.7
+    OPTIONAL_DEFAULT = 0.3
+    PITFALL_DEFAULT = -0.9
+
+
 class LLMProvider(str, Enum):
     """Supported LLM providers."""
 
@@ -220,16 +257,31 @@ def load_settings(config_path: Optional[str | Path] = None) -> Settings:
 _settings: Optional[Settings] = None
 
 
-def get_settings(config_path: Optional[str | Path] = None) -> Settings:
+def get_settings(
+    config_path: Optional[str | Path] = None,
+    force_reload: bool = False,
+) -> Settings:
     """Get the global settings instance.
 
     Args:
         config_path: Optional path to settings.yaml for first load.
+        force_reload: If True, reload settings even if already loaded.
 
     Returns:
         Settings instance.
     """
     global _settings
-    if _settings is None:
+    if _settings is None or force_reload:
         _settings = load_settings(config_path)
     return _settings
+
+
+def reset_settings() -> None:
+    """Reset the global settings instance.
+
+    Useful for testing to ensure clean state between tests.
+    After calling this, the next call to get_settings() will
+    reload settings from the configuration file.
+    """
+    global _settings
+    _settings = None
