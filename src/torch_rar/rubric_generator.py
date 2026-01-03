@@ -38,6 +38,7 @@ from torch_rar.config import RubricWeights, Settings
 from torch_rar.exceptions import JSONParseError, RubricGenerationError, ValidationError
 from torch_rar.json_utils import extract_json_from_response
 from torch_rar.llm_client import LLMClient
+from torch_rar.prompt_templates import PromptTemplateRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -485,15 +486,20 @@ class RubricGenerator:
         self,
         settings: Optional[Settings] = None,
         llm_client: Optional[LLMClient] = None,
+        template_registry: Optional[PromptTemplateRegistry] = None,
     ):
         """Initialize the rubric generator.
 
         Args:
             settings: Configuration settings.
             llm_client: LLM client for API calls. If None, creates new one.
+            template_registry: Prompt template registry. If None, creates new one.
         """
         self.settings = settings or Settings()
         self.llm_client = llm_client or LLMClient(self.settings)
+        self.template_registry = template_registry or PromptTemplateRegistry(
+            self.settings.prompt_templates.directory
+        )
 
     async def generate_rubrics(
         self,
@@ -501,6 +507,7 @@ class RubricGenerator:
         reference_answer: Optional[str] = None,
         min_items: Optional[int] = None,
         max_items: Optional[int] = None,
+        domain: Optional[str] = None,
     ) -> list[RubricItem]:
         """Generate rubrics for evaluating a text sample.
 
@@ -509,6 +516,7 @@ class RubricGenerator:
             reference_answer: Optional reference answer for expert grounding.
             min_items: Minimum number of rubric items.
             max_items: Maximum number of rubric items.
+            domain: Domain for prompt templates (default from settings).
 
         Returns:
             List of RubricItem objects.
@@ -525,19 +533,27 @@ class RubricGenerator:
 
         min_items = min_items or self.settings.min_rubric_items
         max_items = max_items or self.settings.max_rubric_items
+        domain = domain or self.settings.prompt_templates.default_domain
 
-        user_prompt = TOXICITY_RUBRIC_USER_TEMPLATE.format(
+        # Get domain configuration
+        domain_config = self.settings.prompt_templates.domains.get(domain)
+        tasks = domain_config.tasks if domain_config else []
+        context = domain_config.context if domain_config else None
+
+        # Load prompts from templates
+        prompts = self.template_registry.get_rubric_prompts(
+            domain=domain,
+            tasks=tasks,
+            context=context,
             text=text,
             min_items=min_items,
             max_items=max_items,
+            reference_answer=reference_answer,
         )
 
-        if reference_answer:
-            user_prompt += f"\n\n**Reference Assessment:**\n{reference_answer}"
-
         messages = [
-            {"role": "system", "content": TOXICITY_RUBRIC_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {"role": "system", "content": prompts.system},
+            {"role": "user", "content": prompts.user},
         ]
 
         try:
@@ -549,7 +565,7 @@ class RubricGenerator:
             )
 
             rubrics = self._parse_rubrics(response)
-            logger.info(f"Generated {len(rubrics)} rubrics for text sample")
+            logger.info(f"Generated {len(rubrics)} rubrics for text sample (domain: {domain})")
             return rubrics
 
         except JSONParseError as e:

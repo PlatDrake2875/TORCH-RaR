@@ -10,6 +10,36 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class DomainConfig(BaseModel):
+    """Configuration for a specific prompt template domain."""
+
+    tasks: list[str] = Field(
+        default_factory=list,
+        description="List of task descriptions for the system prompt",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Important context for the domain",
+    )
+
+
+class PromptTemplatesConfig(BaseModel):
+    """Configuration for prompt template system."""
+
+    directory: str = Field(
+        default="prompts/",
+        description="Path to the templates directory",
+    )
+    default_domain: str = Field(
+        default="toxicity",
+        description="Default domain to use when not specified",
+    )
+    domains: dict[str, DomainConfig] = Field(
+        default_factory=dict,
+        description="Domain-specific configurations",
+    )
+
+
 class RubricWeights:
     """Standard weights for TORCH-RaR rubric categories.
 
@@ -187,6 +217,12 @@ class Settings(BaseModel):
     weight_important: float = Field(default=0.7, description="Weight for Important criteria")
     weight_optional: float = Field(default=0.3, description="Weight for Optional criteria")
     weight_pitfall: float = Field(default=0.9, description="Weight for Pitfall criteria")
+
+    # Prompt Templates Configuration
+    prompt_templates: PromptTemplatesConfig = Field(
+        default_factory=PromptTemplatesConfig,
+        description="Configuration for prompt template system",
+    )
 
     model_config = {"extra": "ignore"}
 

@@ -34,6 +34,7 @@ from torch_rar.json_utils import (
     extract_rating_from_response,
 )
 from torch_rar.llm_client import LLMClient
+from torch_rar.prompt_templates import PromptTemplateRegistry
 from torch_rar.rubric_generator import RubricCategory, RubricItem
 
 logger = logging.getLogger(__name__)
@@ -186,15 +187,20 @@ class RewardCalculator:
         self,
         settings: Optional[Settings] = None,
         llm_client: Optional[LLMClient] = None,
+        template_registry: Optional[PromptTemplateRegistry] = None,
     ):
         """Initialize the reward calculator.
 
         Args:
             settings: Configuration settings.
             llm_client: LLM client for API calls.
+            template_registry: Prompt template registry. If None, creates new one.
         """
         self.settings = settings or Settings()
         self.llm_client = llm_client or LLMClient(self.settings)
+        self.template_registry = template_registry or PromptTemplateRegistry(
+            self.settings.prompt_templates.directory
+        )
 
         # Weight mapping for explicit aggregation
         self.category_weights = {
@@ -275,6 +281,7 @@ class RewardCalculator:
         self,
         text: str,
         rubric: RubricItem,
+        domain: Optional[str] = None,
     ) -> RubricEvaluation:
         """Evaluate a single rubric criterion using LLM-as-Judge.
 
@@ -288,22 +295,30 @@ class RewardCalculator:
         Args:
             text: The Romanian text to evaluate.
             rubric: The rubric criterion to check.
+            domain: Domain for prompt templates (default from settings).
 
         Returns:
             RubricEvaluation with satisfaction status and reasoning.
         """
+        domain = domain or self.settings.prompt_templates.default_domain
+        domain_config = self.settings.prompt_templates.domains.get(domain)
+        context = domain_config.context if domain_config else None
+
+        # Load prompts from templates
+        prompts = self.template_registry.get_evaluation_prompts(
+            method="explicit",
+            domain=domain,
+            context=context,
+            text=text,
+            rubric_id=rubric.rubric_id,
+            title=rubric.title,
+            category=rubric.category.value,
+            description=rubric.description,
+        )
+
         messages = [
-            {"role": "system", "content": EXPLICIT_EVAL_SYSTEM},
-            {
-                "role": "user",
-                "content": EXPLICIT_EVAL_USER.format(
-                    text=text,
-                    rubric_id=rubric.rubric_id,
-                    title=rubric.title,
-                    category=rubric.category.value,
-                    description=rubric.description,
-                ),
-            },
+            {"role": "system", "content": prompts.system},
+            {"role": "user", "content": prompts.user},
         ]
 
         try:
@@ -348,6 +363,7 @@ class RewardCalculator:
         self,
         text: str,
         rubrics: list[RubricItem],
+        domain: Optional[str] = None,
     ) -> tuple[float, str]:
         """Calculate reward using implicit aggregation (Equation 2 from RaR paper).
 
@@ -360,10 +376,15 @@ class RewardCalculator:
         Args:
             text: The Romanian text to evaluate.
             rubrics: List of rubric criteria (E1-E4, I1-I4, P1-P3).
+            domain: Domain for prompt templates (default from settings).
 
         Returns:
             Tuple of (normalized reward [0-1], raw response).
         """
+        domain = domain or self.settings.prompt_templates.default_domain
+        domain_config = self.settings.prompt_templates.domains.get(domain)
+        context = domain_config.context if domain_config else None
+
         # Format rubrics by category for clearer prompt structure
         essential_rubrics = "\n".join(
             f"- [{r.rubric_id}] {r.title}: {r.description}"
@@ -381,17 +402,20 @@ class RewardCalculator:
             if r.category == RubricCategory.PITFALL
         )
 
+        # Load prompts from templates
+        prompts = self.template_registry.get_evaluation_prompts(
+            method="implicit",
+            domain=domain,
+            context=context,
+            text=text,
+            essential_rubrics=essential_rubrics,
+            important_rubrics=important_rubrics,
+            pitfall_rubrics=pitfall_rubrics,
+        )
+
         messages = [
-            {"role": "system", "content": IMPLICIT_EVAL_SYSTEM},
-            {
-                "role": "user",
-                "content": IMPLICIT_EVAL_USER.format(
-                    text=text,
-                    essential_rubrics=essential_rubrics or "None specified",
-                    important_rubrics=important_rubrics or "None specified",
-                    pitfall_rubrics=pitfall_rubrics or "None specified",
-                ),
-            },
+            {"role": "system", "content": prompts.system},
+            {"role": "user", "content": prompts.user},
         ]
 
         try:

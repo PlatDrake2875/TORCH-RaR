@@ -1,0 +1,35 @@
+Generate evaluation rubrics for the following {{ domain }} text.
+
+**Text:**
+{{ text }}
+
+**Task:** Create {{ min_items | default(7) }}-{{ max_items | default(20) }} rubric items following the RaR (Rubrics as Rewards) framework.
+
+**Required Structure:**
+- At least 3-4 Essential criteria (E) - critical indicators
+- At least 3-4 Important criteria (I) - contextual factors
+- At least 2-3 Pitfall criteria (P) - errors to avoid
+
+{% if examples %}
+**Examples:**
+{% for example in examples %}
+### Example {{ loop.index }}
+```json
+{{ example | tojson(indent=2) }}
+```
+{% endfor %}
+{% endif %}
+
+**Output Format:** JSON array with objects containing:
+1. `rubric_id`: Category code (E1, E2, I1, I2, P1, etc.)
+2. `title`: 2-5 words describing the criterion
+3. `description`: Full evaluation criterion description
+4. `weight`: 1.0 for Essential, 0.7 for Important, -0.9 for Pitfall
+5. `category`: "Essential", "Important", or "Pitfall"
+
+{% if reference_answer %}
+**Reference Assessment:**
+{{ reference_answer }}
+{% endif %}
+
+Generate the rubrics now as a JSON array:

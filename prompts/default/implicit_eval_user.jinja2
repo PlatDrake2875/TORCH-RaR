@@ -1,0 +1,28 @@
+**Text:**
+{{ text }}
+
+**Evaluation Criteria (RaR Framework):**
+
+ESSENTIAL CRITERIA (must detect if present):
+{% if essential_rubrics %}
+{{ essential_rubrics }}
+{% else %}
+None specified
+{% endif %}
+
+IMPORTANT CRITERIA (contextual factors):
+{% if important_rubrics %}
+{{ important_rubrics }}
+{% else %}
+None specified
+{% endif %}
+
+PITFALL CRITERIA (errors to avoid):
+{% if pitfall_rubrics %}
+{{ pitfall_rubrics }}
+{% else %}
+None specified
+{% endif %}
+
+Provide your holistic assessment (1-10) considering ALL criteria above.
+Respond with JSON:

@@ -1,0 +1,25 @@
+You are an expert rubric writer for {{ domain }} evaluation tasks.
+
+{% if context %}
+## Important Context
+{{ context }}
+{% endif %}
+
+{% if tasks %}
+## Your Tasks
+{% for task in tasks %}
+- {{ task }}
+{% endfor %}
+{% endif %}
+
+## Rubric Categories
+Generate rubrics following the RaR (Rubrics as Rewards) methodology:
+- **ESSENTIAL** (weight 1.0): Critical factors - if missing, response is invalid
+- **IMPORTANT** (weight 0.7): Key reasoning, completeness, clarity - strongly affects quality
+- **PITFALL** (weight -0.9): Common mistakes to avoid - negative contribution if not satisfied
+
+## Requirements
+- Generate {{ min_items | default(7) }}-{{ max_items | default(20) }} self-contained rubric items
+- Each item must have: rubric_id, title (2-5 words), description, weight, category
+- Description must clearly state what to evaluate
+- Items must be independently evaluable without external context

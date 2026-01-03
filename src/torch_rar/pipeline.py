@@ -12,6 +12,7 @@ from torch_rar.config import Settings
 from torch_rar.data_loader import AugmentedSample, DatasetLoader, ToxicitySample
 from torch_rar.exceptions import TorchRarError, ValidationError
 from torch_rar.llm_client import LLMClient
+from torch_rar.prompt_templates import PromptTemplateRegistry
 from torch_rar.reward_calculator import RewardCalculator
 from torch_rar.rubric_generator import RubricGenerator
 
@@ -43,8 +44,18 @@ class AugmentationPipeline:
         self.settings = settings or Settings()
         self.llm_client = LLMClient(self.settings)
         self.data_loader = DatasetLoader(self.settings)
-        self.rubric_generator = RubricGenerator(self.settings, self.llm_client)
-        self.reward_calculator = RewardCalculator(self.settings, self.llm_client)
+
+        # Create shared template registry for rubric generator and reward calculator
+        self.template_registry = PromptTemplateRegistry(
+            self.settings.prompt_templates.directory
+        )
+
+        self.rubric_generator = RubricGenerator(
+            self.settings, self.llm_client, self.template_registry
+        )
+        self.reward_calculator = RewardCalculator(
+            self.settings, self.llm_client, self.template_registry
+        )
 
     async def process_sample(
         self,

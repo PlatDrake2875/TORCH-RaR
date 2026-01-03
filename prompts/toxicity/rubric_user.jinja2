@@ -1,0 +1,45 @@
+Generate evaluation rubrics for the following Romanian text that may contain toxic content.
+
+**Text (Romanian):**
+{{ text }}
+
+**Task:** Create {{ min_items | default(7) }}-{{ max_items | default(20) }} rubric items following the TORCH-RaR framework for Romanian toxicity evaluation.
+
+**Required Structure:**
+Your rubrics MUST include items from each category:
+- At least 3-4 Essential criteria (E) - critical toxicity indicators
+- At least 3-4 Important criteria (I) - contextual factors
+- At least 2-3 Pitfall criteria (P) - errors to avoid
+
+{% if examples %}
+**Example Rubrics:**
+{% for example in examples %}
+### Example {{ loop.index }}
+```json
+{{ example | tojson(indent=2) }}
+```
+{% endfor %}
+{% endif %}
+
+**Output Format:** JSON array with objects containing:
+1. `rubric_id`: Category code (E1, E2, I1, I2, P1, etc.)
+2. `title`: 2-5 words describing the criterion
+3. `description`: Full evaluation criterion in Romanian context
+4. `weight`: 1.0 for Essential, 0.7 for Important, -0.9 for Pitfall
+5. `category`: "Essential", "Important", or "Pitfall"
+
+**Example for Romanian context:**
+```json
+[
+  {"rubric_id": "E1", "title": "Discurs de Ura Explicit", "description": "Identifica limbaj explicit de ura care vizeaza grupuri protejate (etnie, religie, gen, orientare sexuala) - include insulte rasiale, antisemite sau xenofobe in limba romana.", "weight": 1.0, "category": "Essential"},
+  {"rubric_id": "I2", "title": "Retorica Politica vs Toxicitate", "description": "Distinge intre opinii politice puternice sau critici legitime ale politicienilor si atacuri cu adevarat toxice - critica politica in Romania poate fi dura fara a fi toxica.", "weight": 0.7, "category": "Important"},
+  {"rubric_id": "P1", "title": "Supraclasificare a Criticii", "description": "Evita etichetarea criticii legitime, dezacordului sau opiniilor negative ca fiind toxice - romanii folosesc frecvent limbaj direct in discursul politic.", "weight": -0.9, "category": "Pitfall"}
+]
+```
+
+{% if reference_answer %}
+**Reference Assessment:**
+{{ reference_answer }}
+{% endif %}
+
+Generate the rubrics now as a JSON array:

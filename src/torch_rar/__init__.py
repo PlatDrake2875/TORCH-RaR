@@ -10,7 +10,15 @@ Key components:
 - AugmentationPipeline: End-to-end dataset augmentation workflow
 """
 
-from torch_rar.config import RubricWeights, Settings, get_settings, load_settings, reset_settings
+from torch_rar.config import (
+    DomainConfig,
+    PromptTemplatesConfig,
+    RubricWeights,
+    Settings,
+    get_settings,
+    load_settings,
+    reset_settings,
+)
 from torch_rar.data_loader import AugmentedSample, DatasetLoader, ToxicitySample
 from torch_rar.exceptions import (
     ConfigurationError,
@@ -29,6 +37,7 @@ from torch_rar.json_utils import (
 )
 from torch_rar.llm_client import LLMClient
 from torch_rar.pipeline import AugmentationPipeline, PipelineStats, run_pipeline
+from torch_rar.prompt_templates import PromptTemplate, PromptTemplateRegistry
 from torch_rar.reward_calculator import RewardCalculator, RewardResult, RubricEvaluation
 from torch_rar.rubric_generator import (
     RubricCategory,
@@ -44,6 +53,8 @@ __all__ = [
     # Configuration
     "Settings",
     "RubricWeights",
+    "DomainConfig",
+    "PromptTemplatesConfig",
     "load_settings",
     "get_settings",
     "reset_settings",
@@ -62,6 +73,9 @@ __all__ = [
     "extract_rating_from_response",
     # LLM Client
     "LLMClient",
+    # Prompt Templates
+    "PromptTemplate",
+    "PromptTemplateRegistry",
     # Rubric Generation
     "RubricGenerator",
     "RubricItem",

@@ -47,6 +47,30 @@ min_rubric_items: 7
 max_rubric_items: 20
 
 # =============================================================================
+# Prompt Templates Configuration
+# =============================================================================
+
+prompt_templates:
+  directory: prompts/
+  default_domain: toxicity
+  domains:
+    toxicity:
+      tasks:
+        - "Evaluate Romanian political discourse for toxicity"
+        - "Identify personal attacks, threats, and group hatred"
+      context: "Focus on Romanian language and cultural context"
+    medical:
+      tasks:
+        - "Evaluate medical response accuracy and safety"
+        - "Check for appropriate disclaimers"
+      context: "Medical domain requires safety-first evaluation"
+    science:
+      tasks:
+        - "Evaluate scientific reasoning and accuracy"
+        - "Check for proper methodology references"
+      context: null
+
+# =============================================================================
 # Processing Configuration
 # =============================================================================
 
