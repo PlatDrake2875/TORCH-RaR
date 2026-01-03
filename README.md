@@ -75,6 +75,40 @@ docker-compose up vllm
 # llm_provider: vllm
 ```
 
+#### Using GGUF Models (Recommended for Limited VRAM)
+
+GGUF quantized models allow running larger models on GPUs with limited VRAM (e.g., 8GB).
+
+```bash
+# 1. Download a GGUF model (Q3_K_M fits ~4GB, good for 8GB VRAM)
+mkdir -p ~/.cache/gguf
+wget -O ~/.cache/gguf/qwen2.5-7b-instruct-q3_k_m.gguf \
+  "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q3_k_m.gguf"
+
+# 2. Run vLLM with GGUF model
+docker run -d --name torch-rar-vllm-gguf --gpus all -p 8000:8000 \
+  -v ~/.cache/gguf:/models \
+  vllm/vllm-openai:latest \
+  --model /models/qwen2.5-7b-instruct-q3_k_m.gguf \
+  --tokenizer Qwen/Qwen2.5-7B-Instruct \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.85 \
+  --host 0.0.0.0 --port 8000
+
+# 3. Update settings.yaml:
+# vllm_model_name: /models/qwen2.5-7b-instruct-q3_k_m.gguf
+```
+
+**GGUF Quantization Options:**
+| Quantization | Size | Quality | VRAM Required |
+|--------------|------|---------|---------------|
+| Q2_K | ~3GB | Lower | ~4GB |
+| Q3_K_M | ~3.8GB | Good | ~5GB |
+| Q4_K_M | ~4.5GB | Better | ~6GB |
+| Q5_K_M | ~5GB | High | ~7GB |
+
+**Note:** vLLM requires single-file GGUF models. Use `gguf-split` to merge multi-part files.
+
 ### LiteLLM Proxy
 
 Routes requests to multiple backends with unified API.
