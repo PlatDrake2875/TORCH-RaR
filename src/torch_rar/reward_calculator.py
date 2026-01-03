@@ -22,7 +22,6 @@ The prompts are designed for Romanian political discourse evaluation.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -34,10 +33,11 @@ from torch_rar.json_utils import (
     extract_rating_from_response,
 )
 from torch_rar.llm_client import LLMClient
+from torch_rar.logging_config import get_logger
 from torch_rar.prompt_templates import PromptTemplateRegistry
 from torch_rar.rubric_generator import RubricCategory, RubricItem
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

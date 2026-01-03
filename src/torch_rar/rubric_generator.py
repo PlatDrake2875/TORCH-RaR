@@ -29,18 +29,19 @@ accounting for cultural expressions, political rhetoric, and regional context.
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
+from torch_rar.cache import RubricCache
 from torch_rar.config import RubricWeights, Settings
 from torch_rar.exceptions import JSONParseError, RubricGenerationError, ValidationError
 from torch_rar.json_utils import extract_json_from_response
 from torch_rar.llm_client import LLMClient
+from torch_rar.logging_config import get_logger
 from torch_rar.prompt_templates import PromptTemplateRegistry
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RubricCategory(str, Enum):
@@ -487,6 +488,7 @@ class RubricGenerator:
         settings: Optional[Settings] = None,
         llm_client: Optional[LLMClient] = None,
         template_registry: Optional[PromptTemplateRegistry] = None,
+        cache: Optional[RubricCache] = None,
     ):
         """Initialize the rubric generator.
 
@@ -494,12 +496,25 @@ class RubricGenerator:
             settings: Configuration settings.
             llm_client: LLM client for API calls. If None, creates new one.
             template_registry: Prompt template registry. If None, creates new one.
+            cache: Rubric cache. If None, creates one based on settings.
         """
         self.settings = settings or Settings()
         self.llm_client = llm_client or LLMClient(self.settings)
         self.template_registry = template_registry or PromptTemplateRegistry(
             self.settings.prompt_templates.directory
         )
+
+        # Initialize cache from settings or use provided one
+        if cache is not None:
+            self.cache = cache
+        else:
+            cache_config = self.settings.cache
+            self.cache = RubricCache(
+                directory=cache_config.directory,
+                ttl_seconds=cache_config.ttl_seconds,
+                size_limit_gb=cache_config.size_limit_gb,
+                enabled=cache_config.enabled,
+            )
 
     async def generate_rubrics(
         self,
@@ -531,9 +546,18 @@ class RubricGenerator:
         if len(text) > 50000:
             raise ValidationError("Text exceeds maximum length of 50000 characters")
 
+        domain = domain or self.settings.prompt_templates.default_domain
+        model = self.settings.rubric_generator_model
+
+        # Check cache first
+        cached_rubrics = self.cache.get(text, model, domain)
+        if cached_rubrics is not None:
+            logger.debug(f"Using cached rubrics for domain: {domain}")
+            return [RubricItem.from_dict(r) for r in cached_rubrics]
+
+        # Generate fresh rubrics
         min_items = min_items or self.settings.min_rubric_items
         max_items = max_items or self.settings.max_rubric_items
-        domain = domain or self.settings.prompt_templates.default_domain
 
         # Get domain configuration
         domain_config = self.settings.prompt_templates.domains.get(domain)
@@ -561,11 +585,15 @@ class RubricGenerator:
                 messages=messages,
                 model_type="rubric",
                 temperature=0.3,
-                max_tokens=4096,
             )
 
             rubrics = self._parse_rubrics(response)
             logger.info(f"Generated {len(rubrics)} rubrics for text sample (domain: {domain})")
+
+            # Cache the result
+            rubrics_dicts = [r.to_dict() for r in rubrics]
+            self.cache.set(text, model, domain, rubrics_dicts)
+
             return rubrics
 
         except JSONParseError as e:
@@ -574,6 +602,14 @@ class RubricGenerator:
         except Exception as e:
             logger.error(f"Failed to generate rubrics: {e}")
             raise RubricGenerationError(f"Failed to generate rubrics: {e}") from e
+
+    def get_cache_stats(self) -> dict:
+        """Get cache statistics.
+
+        Returns:
+            Dictionary with cache statistics.
+        """
+        return self.cache.get_stats()
 
     def _parse_rubrics(self, response: str) -> list[RubricItem]:
         """Parse rubrics from LLM response.

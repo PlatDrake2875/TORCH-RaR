@@ -78,6 +78,7 @@ batch_size: 10
 max_concurrent_requests: 5
 request_timeout: 120
 max_retries: 3
+max_tokens: 8192  # Maximum tokens in LLM response (reduce for smaller context models)
 
 # =============================================================================
 # Reward Weights (for explicit aggregation, following RaR paper)
@@ -94,3 +95,30 @@ weight_essential: 1.0
 weight_important: 0.7
 weight_optional: 0.3
 weight_pitfall: -0.6
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+
+logging:
+  level: "INFO"           # DEBUG, INFO, WARNING, ERROR
+  directory: "logs"       # Directory for log files
+  json_format: true       # Output JSON to log files for analysis
+  rotation: "10 MB"       # When to rotate log files
+  retention: "7 days"     # How long to keep old logs
+
+# =============================================================================
+# Cache Configuration
+# =============================================================================
+
+cache:
+  enabled: true
+  directory: ".cache/rubrics"
+  ttl_seconds: 2592000    # 30 days
+  size_limit_gb: 1.0
+
+# =============================================================================
+# Progress Display
+# =============================================================================
+
+show_progress: true

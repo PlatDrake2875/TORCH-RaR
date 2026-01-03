@@ -8,18 +8,9 @@ Verifiable Domains".
 
 import argparse
 import asyncio
-import logging
 import sys
 
-
-def setup_logging(verbose: bool = False) -> None:
-    """Configure logging."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+from loguru import logger
 
 
 def main() -> int:
@@ -116,26 +107,26 @@ Configuration:
         parser.print_help()
         return 0
 
-    # Setup logging
-    setup_logging(args.verbose)
-    logger = logging.getLogger(__name__)
-
     if args.command == "run":
-        return run_pipeline_command(args, logger)
+        return run_pipeline_command(args)
     elif args.command == "test":
-        return test_config_command(args, logger)
+        return test_config_command(args)
 
     return 0
 
 
-def run_pipeline_command(args: argparse.Namespace, logger: logging.Logger) -> int:
+def run_pipeline_command(args: argparse.Namespace) -> int:
     """Execute the pipeline run command."""
     try:
         from torch_rar.config import load_settings
+        from torch_rar.logging_config import setup_logging
         from torch_rar.pipeline import AugmentationPipeline
 
         # Load settings from YAML
         settings = load_settings(args.config)
+
+        # Setup logging with config
+        setup_logging(settings.logging, verbose=args.verbose)
 
         logger.info("Starting TORCH-RaR pipeline...")
         logger.info(f"  Dataset: {settings.dataset_name}")
@@ -164,25 +155,24 @@ def run_pipeline_command(args: argparse.Namespace, logger: logging.Logger) -> in
         logger.info("Create settings.yaml from the template or specify --config path")
         return 1
     except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
-        if args.verbose:
-            import traceback
-
-            traceback.print_exc()
+        logger.exception(f"Pipeline failed: {e}")
         return 1
 
 
-def test_config_command(args: argparse.Namespace, logger: logging.Logger) -> int:
+def test_config_command(args: argparse.Namespace) -> int:
     """Test the configuration and connectivity."""
     try:
         from torch_rar.config import load_settings
         from torch_rar.llm_client import LLMClient
-
-        logger.info("Testing configuration...")
+        from torch_rar.logging_config import setup_logging
 
         # Load settings from YAML
         settings = load_settings(args.config)
 
+        # Setup logging with config
+        setup_logging(settings.logging, verbose=args.verbose)
+
+        logger.info("Testing configuration...")
         logger.info(f"  LLM Provider: {settings.llm_provider.value}")
         logger.info(f"  Rubric model: {settings.rubric_generator_model}")
         logger.info(f"  Judge model: {settings.judge_model}")
@@ -218,11 +208,7 @@ def test_config_command(args: argparse.Namespace, logger: logging.Logger) -> int
         logger.info("Create settings.yaml from the template or specify --config path")
         return 1
     except Exception as e:
-        logger.error(f"Configuration test failed: {e}")
-        if args.verbose:
-            import traceback
-
-            traceback.print_exc()
+        logger.exception(f"Configuration test failed: {e}")
         return 1
 
 

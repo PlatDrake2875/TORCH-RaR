@@ -10,6 +10,52 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class LoggingConfig(BaseModel):
+    """Configuration for logging settings."""
+
+    level: str = Field(
+        default="INFO",
+        description="Log level (DEBUG, INFO, WARNING, ERROR)",
+    )
+    directory: str = Field(
+        default="logs",
+        description="Directory for log files",
+    )
+    json_format: bool = Field(
+        default=True,
+        description="Whether to output JSON to files",
+    )
+    rotation: str = Field(
+        default="10 MB",
+        description="When to rotate log files",
+    )
+    retention: str = Field(
+        default="7 days",
+        description="How long to keep old logs",
+    )
+
+
+class CacheConfig(BaseModel):
+    """Configuration for rubric caching."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether caching is enabled",
+    )
+    directory: str = Field(
+        default=".cache/rubrics",
+        description="Directory for cache files",
+    )
+    ttl_seconds: int = Field(
+        default=2592000,  # 30 days
+        description="Cache entry time-to-live in seconds",
+    )
+    size_limit_gb: float = Field(
+        default=1.0,
+        description="Maximum cache size in GB",
+    )
+
+
 class DomainConfig(BaseModel):
     """Configuration for a specific prompt template domain."""
 
@@ -211,6 +257,7 @@ class Settings(BaseModel):
     )
     request_timeout: int = Field(default=120, description="API request timeout in seconds")
     max_retries: int = Field(default=3, description="Max retries for failed requests")
+    max_tokens: int = Field(default=2048, description="Maximum tokens in LLM response")
 
     # Reward Weights (for explicit aggregation)
     weight_essential: float = Field(default=1.0, description="Weight for Essential criteria")
@@ -222,6 +269,24 @@ class Settings(BaseModel):
     prompt_templates: PromptTemplatesConfig = Field(
         default_factory=PromptTemplatesConfig,
         description="Configuration for prompt template system",
+    )
+
+    # Logging Configuration
+    logging: LoggingConfig = Field(
+        default_factory=LoggingConfig,
+        description="Configuration for logging",
+    )
+
+    # Cache Configuration
+    cache: CacheConfig = Field(
+        default_factory=CacheConfig,
+        description="Configuration for rubric caching",
+    )
+
+    # Progress Display
+    show_progress: bool = Field(
+        default=True,
+        description="Whether to show progress bars",
     )
 
     model_config = {"extra": "ignore"}

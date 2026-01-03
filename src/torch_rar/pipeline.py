@@ -1,22 +1,21 @@
 """Main pipeline for dataset augmentation using RaR method."""
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
-
-from tqdm import tqdm
 
 from torch_rar.config import Settings
 from torch_rar.data_loader import AugmentedSample, DatasetLoader, ToxicitySample
 from torch_rar.exceptions import TorchRarError, ValidationError
 from torch_rar.llm_client import LLMClient
+from torch_rar.logging_config import get_logger
+from torch_rar.progress import ProgressTracker
 from torch_rar.prompt_templates import PromptTemplateRegistry
 from torch_rar.reward_calculator import RewardCalculator
 from torch_rar.rubric_generator import RubricGenerator
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -56,6 +55,9 @@ class AugmentationPipeline:
         self.reward_calculator = RewardCalculator(
             self.settings, self.llm_client, self.template_registry
         )
+
+        # Progress tracking
+        self.progress = ProgressTracker(disable=not self.settings.show_progress)
 
     async def process_sample(
         self,
@@ -154,28 +156,46 @@ class AugmentationPipeline:
 
         # Process samples in batches
         augmented_samples: list[AugmentedSample] = []
-        failed_count = 0
 
-        # Process with progress bar
+        # Reset progress stats for this run
+        self.progress.reset_stats()
+
+        # Process with Rich progress bar
         batch_size = self.settings.batch_size
-        for i in tqdm(range(0, total_samples, batch_size), desc="Processing batches"):
-            batch = samples[i : i + batch_size]
+        num_batches = (total_samples + batch_size - 1) // batch_size
 
-            # Process batch concurrently
-            tasks = [
-                self.process_sample(s, use_predefined_rubrics, reward_method)
-                for s in batch
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        with self.progress.track_pipeline(
+            total=num_batches,
+            description="[cyan]Augmenting dataset",
+        ) as tracker:
+            for i in range(0, total_samples, batch_size):
+                batch = samples[i : i + batch_size]
 
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error(f"Batch processing error: {result}")
-                    failed_count += 1
-                elif result is None:
-                    failed_count += 1
-                else:
-                    augmented_samples.append(result)
+                # Process batch concurrently
+                tasks = [
+                    self.process_sample(s, use_predefined_rubrics, reward_method)
+                    for s in batch
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Batch processing error: {result}")
+                        if tracker:
+                            tracker.fail(1)
+                    elif result is None:
+                        if tracker:
+                            tracker.fail(1)
+                    else:
+                        augmented_samples.append(result)
+
+                # Advance progress after processing batch
+                if tracker:
+                    tracker.advance(1)
+
+        # Get final progress stats
+        progress_stats = self.progress.get_stats()
+        failed_count = progress_stats["failed"]
 
         # Calculate statistics
         execution_time = (datetime.now() - start_time).total_seconds()
@@ -211,7 +231,7 @@ class AugmentationPipeline:
             logger.info(f"Saved augmented dataset to {output_path}")
 
         # Log statistics
-        logger.info(f"Pipeline Statistics:")
+        logger.info("Pipeline Statistics:")
         logger.info(f"  Total samples: {stats.total_samples}")
         logger.info(f"  Processed: {stats.processed_samples}")
         logger.info(f"  Failed: {stats.failed_samples}")
@@ -220,6 +240,15 @@ class AugmentationPipeline:
         if stats.avg_implicit_reward is not None:
             logger.info(f"  Avg implicit reward: {stats.avg_implicit_reward:.4f}")
         logger.info(f"  Execution time: {stats.execution_time_seconds:.2f}s")
+
+        # Log cache statistics
+        cache_stats = self.rubric_generator.get_cache_stats()
+        logger.info("Cache Statistics:")
+        logger.info(f"  Hits: {cache_stats['hits']}")
+        logger.info(f"  Misses: {cache_stats['misses']}")
+        logger.info(f"  Hit rate: {cache_stats['hit_rate']}")
+        if "cache_size_mb" in cache_stats:
+            logger.info(f"  Cache size: {cache_stats['cache_size_mb']:.2f} MB")
 
         return augmented_samples, stats
 

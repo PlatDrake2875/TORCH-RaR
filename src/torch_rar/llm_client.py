@@ -1,7 +1,6 @@
 """LLM client wrapper using LiteLLM for unified API access."""
 
 import asyncio
-import logging
 from typing import Any, Optional
 
 import litellm
@@ -15,8 +14,9 @@ from tenacity import (
 from torch_rar.config import LLMProvider, Settings
 from torch_rar.exceptions import LLMClientError
 from torch_rar.json_utils import extract_json_from_response
+from torch_rar.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LLMClient:
@@ -71,7 +71,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         model_type: str = "judge",
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
         response_format: Optional[dict] = None,
     ) -> str:
         """Generate a completion from the LLM.
@@ -94,7 +94,7 @@ class LLMClient:
             {
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
+                "max_tokens": max_tokens or self.settings.max_tokens,
             }
         )
 
@@ -122,7 +122,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         model_type: str = "judge",
         temperature: float = 0.3,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
     ) -> dict[str, Any]:
         """Generate a JSON completion from the LLM.
 
@@ -150,7 +150,7 @@ class LLMClient:
         messages_list: list[list[dict[str, str]]],
         model_type: str = "judge",
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
     ) -> list[Optional[str]]:
         """Generate completions for multiple message sets concurrently.
 
@@ -193,7 +193,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         model_type: str = "judge",
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: Optional[int] = None,
     ) -> str:
         """Synchronous wrapper for complete().
 

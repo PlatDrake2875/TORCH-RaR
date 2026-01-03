@@ -1,6 +1,5 @@
 """Dataset loading and management for toxicity data augmentation."""
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -10,8 +9,9 @@ from datasets import Dataset, DatasetDict, load_dataset
 
 from torch_rar.config import Settings
 from torch_rar.exceptions import DatasetError
+from torch_rar.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

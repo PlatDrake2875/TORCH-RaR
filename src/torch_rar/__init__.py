@@ -10,8 +10,11 @@ Key components:
 - AugmentationPipeline: End-to-end dataset augmentation workflow
 """
 
+from torch_rar.cache import RubricCache
 from torch_rar.config import (
+    CacheConfig,
     DomainConfig,
+    LoggingConfig,
     PromptTemplatesConfig,
     RubricWeights,
     Settings,
@@ -19,6 +22,8 @@ from torch_rar.config import (
     load_settings,
     reset_settings,
 )
+from torch_rar.logging_config import get_logger, setup_logging
+from torch_rar.progress import ProgressContext, ProgressTracker
 from torch_rar.data_loader import AugmentedSample, DatasetLoader, ToxicitySample
 from torch_rar.exceptions import (
     ConfigurationError,
@@ -55,9 +60,19 @@ __all__ = [
     "RubricWeights",
     "DomainConfig",
     "PromptTemplatesConfig",
+    "LoggingConfig",
+    "CacheConfig",
     "load_settings",
     "get_settings",
     "reset_settings",
+    # Logging
+    "setup_logging",
+    "get_logger",
+    # Progress
+    "ProgressTracker",
+    "ProgressContext",
+    # Cache
+    "RubricCache",
     # Exceptions
     "TorchRarError",
     "ConfigurationError",
